@@ -11,14 +11,8 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const ELEVEN_KEY = process.env.ELEVEN_KEY;
 const VOICE_ID = process.env.VOICE_ID;
 
-// =========================
-// HEALTH
-// =========================
 app.get("/", (req, res) => res.send("OK"));
 
-// =========================
-// TWIML ENTRY
-// =========================
 app.all("/voice", (req, res) => {
   res.type("text/xml").send(`
 <Response>
@@ -45,17 +39,17 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 // =========================
-// μ-LAW CONVERSION (PURE JS)
+// SAFE μ-LAW
 // =========================
 function linearToMulaw(sample) {
-  const MULAW_MAX = 0x1FFF;
-  const MULAW_BIAS = 33;
+  const BIAS = 33;
+  const CLIP = 32635;
 
   let sign = (sample >> 8) & 0x80;
   if (sign) sample = -sample;
 
-  sample = Math.min(sample, MULAW_MAX);
-  sample += MULAW_BIAS;
+  if (sample > CLIP) sample = CLIP;
+  sample += BIAS;
 
   let exponent = 7;
   for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; expMask >>= 1) {
@@ -63,15 +57,16 @@ function linearToMulaw(sample) {
   }
 
   let mantissa = (sample >> (exponent + 3)) & 0x0F;
-  let mulaw = ~(sign | (exponent << 4) | mantissa);
-
-  return mulaw & 0xFF;
+  return ~(sign | (exponent << 4) | mantissa) & 0xFF;
 }
 
 function pcm16ToMulaw(buffer) {
-  const out = Buffer.alloc(buffer.length / 2);
+  // 🔥 ensure even length
+  const safeLength = buffer.length - (buffer.length % 2);
 
-  for (let i = 0, j = 0; i < buffer.length; i += 2, j++) {
+  const out = Buffer.alloc(safeLength / 2);
+
+  for (let i = 0, j = 0; i < safeLength; i += 2, j++) {
     const sample = buffer.readInt16LE(i);
     out[j] = linearToMulaw(sample);
   }
@@ -80,36 +75,31 @@ function pcm16ToMulaw(buffer) {
 }
 
 // =========================
-// AI RESPONSE
+// AI
 // =========================
 async function getAIResponse(text) {
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": ANTHROPIC_KEY,
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-5",
-        max_tokens: 60,
-        temperature: 0.9,
-        system: "Casual, human, short responses.",
-        messages: [{ role: "user", content: text }]
-      })
-    });
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": ANTHROPIC_KEY,
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-5",
+      max_tokens: 60,
+      temperature: 0.9,
+      system: "Casual, short, human.",
+      messages: [{ role: "user", content: text }]
+    })
+  });
 
-    const data = await res.json();
-    return data.content?.[0]?.text || "yeah gotcha";
-
-  } catch {
-    return "yeah gotcha";
-  }
+  const data = await res.json();
+  return data.content?.[0]?.text || "yeah gotcha";
 }
 
 // =========================
-// REALTIME HANDLER
+// REALTIME
 // =========================
 wss.on("connection", (ws) => {
   console.log("REALTIME CONNECTED");
@@ -133,7 +123,7 @@ wss.on("connection", (ws) => {
     const reply = await getAIResponse(transcript);
     console.log("AI:", reply);
 
-    // 🔥 GET PCM AUDIO (NOT MP3)
+    // 🔥 GET PCM
     const tts = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
       {
@@ -152,14 +142,18 @@ wss.on("connection", (ws) => {
 
     const pcm = Buffer.from(await tts.arrayBuffer());
 
-    // 🔥 DOWNSAMPLE 16k → 8k (simple skip)
-    const downsampled = Buffer.alloc(pcm.length / 2);
-    for (let i = 0, j = 0; j < downsampled.length; i += 4, j += 2) {
-      downsampled[j] = pcm[i];
-      downsampled[j + 1] = pcm[i + 1];
+    // 🔥 SAFE DOWNSAMPLE (16k → 8k)
+    const downsampled = Buffer.alloc(Math.floor(pcm.length / 2));
+
+    let writeIndex = 0;
+    for (let i = 0; i + 3 < pcm.length; i += 4) {
+      downsampled[writeIndex++] = pcm[i];
+      downsampled[writeIndex++] = pcm[i + 1];
     }
 
-    const mulaw = pcm16ToMulaw(downsampled);
+    const trimmed = downsampled.slice(0, writeIndex);
+
+    const mulaw = pcm16ToMulaw(trimmed);
 
     const chunkSize = 320;
 
@@ -199,5 +193,5 @@ wss.on("connection", (ws) => {
 // START
 // =========================
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("RUNNING CLEAN REALTIME");
+  console.log("RUNNING FINAL STABLE");
 });
