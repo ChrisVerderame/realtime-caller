@@ -100,7 +100,7 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 60,
+          max_tokens: 55,
           temperature: 0.95,
           system: `
 You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
@@ -247,11 +247,11 @@ Sound like a real guy calling > being perfect
           body: JSON.stringify({
             text: reply,
             model_id: "eleven_multilingual_v2",
-            optimize_streaming_latency: 0,
+            optimize_streaming_latency: 3,
             voice_settings: {
-              stability: 0.08,
+              stability: 0.09,
               similarity_boost: 0.8,
-              style: 0.7,
+              style: 0.67,
               use_speaker_boost: true
             }
           })
