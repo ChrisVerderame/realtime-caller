@@ -11,12 +11,9 @@
 
   <script>
     let ws;
-    let currentAudio = null;
 
-    let speakingFrames = 0;
-    let interruptTimeout = null;
-    let aiStartTime = 0;
-    let userStartedSpeakingAt = null;
+    let audioQueue = [];
+    let isPlaying = false;
 
     document.getElementById("startBtn").onclick = async () => {
       console.log("Starting...");
@@ -40,12 +37,10 @@
 
       const audioContext = new AudioContext({ sampleRate: 48000 });
       const source = audioContext.createMediaStreamSource(stream);
-
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
       source.connect(processor);
 
-      // 🔇 silent output (keeps processing alive, no echo)
       const silentGain = audioContext.createGain();
       silentGain.gain.value = 0;
 
@@ -57,50 +52,6 @@
 
         const input = e.inputBuffer.getChannelData(0);
 
-        // 🔊 volume detection
-        let sum = 0;
-        for (let i = 0; i < input.length; i++) {
-          sum += Math.abs(input[i]);
-        }
-        const volume = sum / input.length;
-
-        // 🎙 detect sustained speaking
-        if (volume > 0.04) {
-          speakingFrames++;
-
-          if (!userStartedSpeakingAt) {
-            userStartedSpeakingAt = Date.now();
-          }
-        } else {
-          speakingFrames = 0;
-          userStartedSpeakingAt = null;
-        }
-
-        const aiTalkingLongEnough = Date.now() - aiStartTime > 800;
-
-        // 🧠 NATURAL OVERLAP INTERRUPTION
-        if (
-          speakingFrames > 3 &&
-          currentAudio &&
-          aiTalkingLongEnough &&
-          userStartedSpeakingAt &&
-          Date.now() - userStartedSpeakingAt > 600
-        ) {
-          if (!interruptTimeout) {
-            interruptTimeout = setTimeout(() => {
-              if (currentAudio) {
-                console.log("INTERRUPT (natural overlap)");
-                currentAudio.pause();
-                currentAudio = null;
-              }
-              interruptTimeout = null;
-            }, 300); // 👈 smooth finish
-          }
-        } else {
-          interruptTimeout = null;
-        }
-
-        // 🎧 send audio
         const buffer = new ArrayBuffer(input.length * 2);
         const view = new DataView(buffer);
 
@@ -112,15 +63,21 @@
         ws.send(buffer);
       };
 
-      ws.onmessage = (msg) => {
-        console.log("AI AUDIO RECEIVED");
+      // =========================
+      // 🔥 AUDIO QUEUE SYSTEM
+      // =========================
 
-        if (currentAudio) {
-          currentAudio.pause();
-          currentAudio = null;
+      function playNext() {
+        if (audioQueue.length === 0) {
+          isPlaying = false;
+          return;
         }
 
-        const byteCharacters = atob(msg.data);
+        isPlaying = true;
+
+        const base64 = audioQueue.shift();
+
+        const byteCharacters = atob(base64);
         const byteNumbers = new Array(byteCharacters.length);
 
         for (let i = 0; i < byteCharacters.length; i++) {
@@ -128,19 +85,29 @@
         }
 
         const byteArray = new Uint8Array(byteNumbers);
-
         const blob = new Blob([byteArray], { type: "audio/mpeg" });
         const url = URL.createObjectURL(blob);
 
         const audio = new Audio(url);
-        currentAudio = audio;
 
-        // 🧠 track when AI starts speaking
-        aiStartTime = Date.now();
+        audio.onended = () => {
+          playNext();
+        };
 
         audio.play().catch(err => {
           console.error("Playback error:", err);
+          playNext();
         });
+      }
+
+      ws.onmessage = (msg) => {
+        console.log("AI AUDIO RECEIVED");
+
+        audioQueue.push(msg.data);
+
+        if (!isPlaying) {
+          playNext();
+        }
       };
     };
   </script>
