@@ -5,155 +5,176 @@ const WebSocket = require("ws");
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 
+const DEEPGRAM_KEY = process.env.DEEPGRAM_KEY;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
+const ELEVEN_KEY = process.env.ELEVEN_KEY;
+const VOICE_ID = process.env.VOICE_ID;
 
 // =========================
 // HEALTH
 // =========================
-app.get("/", (req, res) => {
-  res.send("OK");
-});
+app.get("/", (req, res) => res.send("OK"));
 
 // =========================
-// TWILIO VOICE
+// TWILIO ENTRY
 // =========================
 app.all("/voice", (req, res) => {
   res.type("text/xml").send(`
 <Response>
   <Connect>
-    <ConversationRelay 
-      url="wss://${req.headers.host}/relay"
-      ttsProvider="google"
-      voice="en-US-Neural2-J"
-    />
+    <Stream url="wss://${req.headers.host}/media" />
   </Connect>
 </Response>
   `);
 });
 
 const server = http.createServer(app);
-
-// =========================
-// RELAY WS
-// =========================
-const relayWss = new WebSocket.Server({ noServer: true });
-
-server.on("upgrade", (req, socket, head) => {
-  if (req.url === "/relay") {
-    relayWss.handleUpgrade(req, socket, head, (ws) => {
-      relayWss.emit("connection", ws, req);
-    });
-  }
-});
+const wss = new WebSocket.Server({ server });
 
 // =========================
 // AI
 // =========================
 async function getAIResponse(history) {
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": ANTHROPIC_KEY,
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-5",
-        max_tokens: 50,
-        temperature: 0.9,
-        system: `
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": ANTHROPIC_KEY,
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-5",
+      max_tokens: 50,
+      temperature: 0.9,
+      system: `
 You are Jack from Blackline.
 
-You are on a real phone call.
+Casual. Human. Short.
 
-TONE:
-- casual
-- slightly messy
-- not polished
-- not scripted
-
-STYLE:
-- 1 sentence most of the time
-- sometimes no question
-- sometimes just react
-- use fillers: "yeah", "honestly", "gotcha"
-
-RULES:
-- NEVER sound like customer service
-- NEVER explain too much
-- NEVER repeat phrasing
-- DON'T be overly helpful
-
-GOAL:
-- keep it relaxed
-- move toward Chris seeing the property
+1 sentence most of the time.
+Use fillers like "yeah", "honestly", "gotcha".
+Don't sound scripted.
 `,
-        messages: history
-      })
-    });
+      messages: history
+    })
+  });
 
-    const data = await res.json();
+  const data = await res.json();
 
-    let text = "";
-    if (data?.content) {
-      for (const b of data.content) {
-        if (b.type === "text") text += b.text;
-      }
-    }
-
-    return text.trim() || "yeah gotcha";
-  } catch (err) {
-    return "yeah gotcha — makes sense";
+  let text = "";
+  for (const b of data.content || []) {
+    if (b.type === "text") text += b.text;
   }
+
+  return text.trim() || "yeah gotcha";
 }
 
 // =========================
-// CONVO
+// CONNECTION
 // =========================
-relayWss.on("connection", (ws) => {
-  console.log("RELAY CONNECTED");
+wss.on("connection", (ws) => {
+  console.log("CALL CONNECTED");
 
   let history = [];
-  let started = false;
+  let streamReady = false;
 
-  const speak = (text) => {
-    ws.send(JSON.stringify({
-      type: "text",
-      token: text
-    }));
-  };
+  // =========================
+  // DEEPGRAM
+  // =========================
+  const dg = new WebSocket(
+    "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000",
+    {
+      headers: { Authorization: `Token ${DEEPGRAM_KEY}` }
+    }
+  );
 
-  ws.on("message", async (msg) => {
+  dg.on("open", () => console.log("DG CONNECTED"));
+
+  dg.on("message", async (msg) => {
     try {
       const data = JSON.parse(msg);
+      const transcript = data.channel?.alternatives?.[0]?.transcript;
 
-      // FIRST LINE
-      if (data.type === "prompt" && !started) {
-        started = true;
+      if (!transcript || transcript.length < 2) return;
 
-        const opening = "hey — this is jack from blackline, did you fill out a form trying to sell your house?";
-        history.push({ role: "assistant", content: opening });
-        speak(opening);
-        return;
-      }
+      console.log("USER:", transcript);
 
-      // USER TALKING
-      if (data.type === "prompt" && started) {
-        const userText = data.voicePrompt || "";
+      history.push({ role: "user", content: transcript });
 
-        history.push({ role: "user", content: userText });
+      const reply = await getAIResponse(history);
+      history.push({ role: "assistant", content: reply });
 
-        const reply = await getAIResponse(history);
+      console.log("AI:", reply);
 
-        history.push({ role: "assistant", content: reply });
+      if (!streamReady) return;
 
-        speak(reply);
+      // =========================
+      // ELEVENLABS STREAM
+      // =========================
+      const tts = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream`,
+        {
+          method: "POST",
+          headers: {
+            "xi-api-key": ELEVEN_KEY,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            text: reply,
+            model_id: "eleven_turbo_v2",
+            output_format: "ulaw_8000"
+          })
+        }
+      );
+
+      const reader = tts.body.getReader();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        if (ws.readyState !== 1) break;
+
+        ws.send(JSON.stringify({
+          event: "media",
+          media: {
+            payload: Buffer.from(value).toString("base64")
+          }
+        }));
+
+        // 🔥 pacing
+        await new Promise(r => setTimeout(r, 20));
       }
 
     } catch (err) {
-      console.log("ERR:", err.message);
+      console.log("AI ERROR:", err.message);
     }
+  });
+
+  // =========================
+  // TWILIO AUDIO → DG
+  // =========================
+  ws.on("message", (msg) => {
+    try {
+      const data = JSON.parse(msg);
+
+      if (data.event === "start") {
+        streamReady = true;
+        console.log("STREAM READY");
+      }
+
+      if (data.event === "media") {
+        dg.send(Buffer.from(data.media.payload, "base64"));
+      }
+
+    } catch (err) {
+      console.log("WS ERROR:", err.message);
+    }
+  });
+
+  ws.on("close", () => {
+    dg.close();
+    console.log("CALL ENDED");
   });
 });
 
