@@ -3,13 +3,11 @@ const http = require("http");
 const WebSocket = require("ws");
 const { AccessToken } = require("livekit-server-sdk");
 
-// dialing
 const { getLeads } = require("./google");
 const { callLead } = require("./dialer");
 
 const app = express();
 
-// ✅ REQUIRED FOR TWILIO (fixes application error)
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
@@ -57,20 +55,6 @@ app.get("/token", async (req, res) => {
 });
 
 // =========================
-// TWILIO → LIVEKIT (REALTIME)
-// =========================
-app.post("/twilio-voice", (req, res) => {
-  const VoiceResponse = require("twilio").twiml.VoiceResponse;
-  const twiml = new VoiceResponse();
-
-  // send call into LiveKit SIP
-  twiml.dial().sip(`sip:${process.env.LIVEKIT_SIP_ENDPOINT}`);
-
-  res.type("text/xml");
-  res.send(twiml.toString());
-});
-
-// =========================
 // REALTIME AI WS (UNCHANGED)
 // =========================
 wss.on("connection", (ws) => {
@@ -111,6 +95,9 @@ wss.on("connection", (ws) => {
 
       history.push({ role: "user", content: transcript });
 
+      // =========================
+      // AI RESPONSE (YOUR ORIGINAL PROMPT RESTORED)
+      // =========================
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
