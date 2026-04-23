@@ -47,7 +47,7 @@ wss.on("connection", (ws) => {
 
   let history = [];
 
-  // 🔥 CONNECT TO DEEPGRAM
+  // 🔥 Deepgram STT
   const dg = new WebSocket(
     "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000",
     {
@@ -69,7 +69,7 @@ wss.on("connection", (ws) => {
       history.push({ role: "user", content: transcript });
 
       // =========================
-      // AI
+      // AI (Anthropic)
       // =========================
       const ai = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -85,7 +85,7 @@ wss.on("connection", (ws) => {
           system: `
 You are Jack from Blackline.
 
-Speak casually like a real human.
+Speak casually and naturally.
 
 Goal:
 - build light rapport
@@ -115,7 +115,7 @@ Keep responses short.
       console.log("AI:", reply);
 
       // =========================
-      // ELEVENLABS (FIXED AUDIO)
+      // ELEVENLABS (CORRECT FORMAT)
       // =========================
       const tts = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
@@ -127,22 +127,27 @@ Keep responses short.
           },
           body: JSON.stringify({
             text: reply,
-            model_id: "eleven_turbo_v2"
+            model_id: "eleven_turbo_v2",
+            output_format: "ulaw_8000" // 🔥 CRITICAL
           })
         }
       );
 
       const audioBuffer = await tts.arrayBuffer();
 
-      // 🔥 SEND AUDIO BACK TO TWILIO
-      const base64Audio = Buffer.from(audioBuffer).toString("base64");
+      // 🔥 stream in chunks (required for Twilio)
+      const chunkSize = 320;
 
-      ws.send(JSON.stringify({
-        event: "media",
-        media: {
-          payload: base64Audio
-        }
-      }));
+      for (let i = 0; i < audioBuffer.byteLength; i += chunkSize) {
+        const chunk = audioBuffer.slice(i, i + chunkSize);
+
+        ws.send(JSON.stringify({
+          event: "media",
+          media: {
+            payload: Buffer.from(chunk).toString("base64")
+          }
+        }));
+      }
 
     } catch (err) {
       console.log("AI ERROR:", err);
@@ -150,7 +155,7 @@ Keep responses short.
   });
 
   // =========================
-  // TWILIO AUDIO → DEEPGRAM
+  // AUDIO → DEEPGRAM
   // =========================
   ws.on("message", (msg) => {
     try {
@@ -172,7 +177,7 @@ Keep responses short.
 });
 
 // =========================
-// START
+// START SERVER
 // =========================
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
   console.log("RUNNING");
