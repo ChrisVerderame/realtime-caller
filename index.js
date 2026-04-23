@@ -8,9 +8,7 @@ const ELEVEN_KEY = process.env.ELEVEN_KEY;
 const VOICE_ID = process.env.VOICE_ID;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 
-// =========================
-// MEMORY (simple)
-// =========================
+// store last audio
 let lastAudio = null;
 
 // =========================
@@ -19,7 +17,7 @@ let lastAudio = null;
 app.get("/", (req, res) => res.send("OK"));
 
 // =========================
-// AI (FAST)
+// AI RESPONSE (FAST)
 // =========================
 async function getAIResponse(text) {
   try {
@@ -32,15 +30,13 @@ async function getAIResponse(text) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-5",
-        max_tokens: 30, // 🔥 faster
+        max_tokens: 30,
         temperature: 0.8,
         system: `
 You are Jack from Blackline.
 
-Talk like a normal human.
-Short responses.
-1 sentence max.
-Never robotic.
+Speak casually like a real person.
+Short, natural, one sentence responses.
 `,
         messages: [{ role: "user", content: text || "hello" }]
       })
@@ -71,7 +67,7 @@ app.all("/voice", async (req, res) => {
   const reply = await getAIResponse(speech);
   console.log("AI:", reply);
 
-  // 🔥 ElevenLabs (fastest config)
+  // 🔥 ElevenLabs request (stable MP3)
   const tts = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
     {
@@ -82,7 +78,11 @@ app.all("/voice", async (req, res) => {
       },
       body: JSON.stringify({
         text: reply,
-        model_id: "eleven_turbo_v2"
+        model_id: "eleven_multilingual_v2",
+        voice_settings: {
+          stability: 0.4,
+          similarity_boost: 0.8
+        }
       })
     }
   );
@@ -90,12 +90,15 @@ app.all("/voice", async (req, res) => {
   const buffer = Buffer.from(await tts.arrayBuffer());
   lastAudio = buffer;
 
+  // 🔥 cache buster (VERY IMPORTANT)
+  const audioUrl = `https://${req.headers.host}/audio?ts=${Date.now()}`;
+
   res.type("text/xml").send(`
 <Response>
-  <Play>https://${req.headers.host}/audio</Play>
+  <Play>${audioUrl}</Play>
   <Gather 
-    input="speech" 
-    action="/voice" 
+    input="speech"
+    action="/voice"
     method="POST"
     timeout="1"
     speechTimeout="auto"
@@ -105,18 +108,23 @@ app.all("/voice", async (req, res) => {
 });
 
 // =========================
-// AUDIO
+// AUDIO ROUTE (FIXED)
 // =========================
 app.get("/audio", (req, res) => {
   if (!lastAudio) return res.status(404).send("No audio");
 
-  res.set({ "Content-Type": "audio/mpeg" });
-  res.send(lastAudio);
+  res.set({
+    "Content-Type": "audio/mpeg",
+    "Content-Length": lastAudio.length,
+    "Cache-Control": "no-cache, no-store, must-revalidate"
+  });
+
+  res.end(lastAudio);
 });
 
 // =========================
 // START
 // =========================
 http.createServer(app).listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("RUNNING FAST CLEAN VERSION");
+  console.log("RUNNING CLEAN AUDIO BUILD");
 });
