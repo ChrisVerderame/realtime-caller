@@ -12,6 +12,7 @@
   <script>
     let ws;
     let currentAudio = null;
+    let interruptTimeout = null;
 
     document.getElementById("startBtn").onclick = async () => {
       console.log("Starting...");
@@ -40,7 +41,7 @@
       ws.onerror = (e) => console.error("WS ERROR", e);
 
       // =========================
-      // MIC PIPELINE (RAW PCM)
+      // MIC PIPELINE
       // =========================
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -51,7 +52,7 @@
 
       source.connect(processor);
 
-      // 🔥 silent output (keeps processor alive, no echo)
+      // silent output (no echo)
       const silentGain = audioContext.createGain();
       silentGain.gain.value = 0;
 
@@ -63,18 +64,27 @@
 
         const input = e.inputBuffer.getChannelData(0);
 
-        // 🔥 detect real speaking (prevents instant cutoff)
+        // 🔥 volume detection
         let sum = 0;
         for (let i = 0; i < input.length; i++) {
           sum += Math.abs(input[i]);
         }
         const volume = sum / input.length;
 
-        // 🔥 only interrupt if user is ACTUALLY speaking
-        if (volume > 0.02 && currentAudio) {
-          console.log("INTERRUPT");
-          currentAudio.pause();
-          currentAudio = null;
+        // 🔥 NATURAL INTERRUPTION (delayed cut)
+        if (volume > 0.03 && currentAudio) {
+          if (!interruptTimeout) {
+            interruptTimeout = setTimeout(() => {
+              if (currentAudio) {
+                console.log("INTERRUPT (delayed)");
+                currentAudio.pause();
+                currentAudio = null;
+              }
+              interruptTimeout = null;
+            }, 500); // allow AI to finish slightly
+          }
+        } else {
+          interruptTimeout = null;
         }
 
         // convert float → int16
@@ -90,12 +100,12 @@
       };
 
       // =========================
-      // PLAY AI AUDIO (FIXED)
+      // PLAY AI AUDIO
       // =========================
       ws.onmessage = (msg) => {
         console.log("AI AUDIO RECEIVED");
 
-        // stop previous audio
+        // stop previous audio (when new response comes in)
         if (currentAudio) {
           currentAudio.pause();
           currentAudio = null;
@@ -111,7 +121,6 @@
 
         const byteArray = new Uint8Array(byteNumbers);
 
-        // blob playback (reliable)
         const blob = new Blob([byteArray], { type: "audio/mpeg" });
         const url = URL.createObjectURL(blob);
 
