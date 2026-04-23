@@ -109,10 +109,10 @@ wss.on("connection", (ws) => {
       if (!streamReady) return;
 
       // =========================
-      // ELEVENLABS STREAM
+      // ELEVENLABS (FIXED)
       // =========================
       const tts = await fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream`,
+        `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
         {
           method: "POST",
           headers: {
@@ -127,22 +127,24 @@ wss.on("connection", (ws) => {
         }
       );
 
-      const reader = tts.body.getReader();
+      const audioBuffer = await tts.arrayBuffer();
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      // 🔥 correct chunking
+      const chunkSize = 320;
 
+      for (let i = 0; i < audioBuffer.byteLength; i += chunkSize) {
         if (ws.readyState !== 1) break;
+
+        const chunk = audioBuffer.slice(i, i + chunkSize);
 
         ws.send(JSON.stringify({
           event: "media",
           media: {
-            payload: Buffer.from(value).toString("base64")
+            payload: Buffer.from(chunk).toString("base64")
           }
         }));
 
-        // 🔥 pacing
+        // 🔥 pacing (critical)
         await new Promise(r => setTimeout(r, 20));
       }
 
