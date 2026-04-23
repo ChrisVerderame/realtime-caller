@@ -1,17 +1,9 @@
 const express = require("express");
 const http = require("http");
+const WebSocket = require("ws");
 
 const app = express();
-app.use(express.urlencoded({ extended: true }));
-
-const ELEVEN_KEY = process.env.ELEVEN_KEY;
-const VOICE_ID = process.env.VOICE_ID;
-const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
-
-// =========================
-// MEMORY (VERY SIMPLE)
-// =========================
-let lastAudio = null;
+const server = http.createServer(app);
 
 // =========================
 // HEALTH
@@ -19,111 +11,67 @@ let lastAudio = null;
 app.get("/", (req, res) => res.send("OK"));
 
 // =========================
-// AI RESPONSE
+// SIP ENTRY (NO AUDIO HERE)
 // =========================
-async function getAIResponse(userText) {
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": ANTHROPIC_KEY,
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-5",
-        max_tokens: 50,
-        temperature: 0.9,
-        system: `
-You are Jack from Blackline.
-
-Casual, human, short.
-1 sentence most of the time.
-Use "yeah", "honestly", "gotcha".
-Do not sound scripted.
-`,
-        messages: [
-          { role: "user", content: userText || "hello" }
-        ]
-      })
-    });
-
-    const data = await res.json();
-
-    let text = "";
-    for (const b of data.content || []) {
-      if (b.type === "text") text += b.text;
-    }
-
-    return text.trim() || "yeah gotcha";
-
-  } catch (err) {
-    console.log("AI ERROR:", err.message);
-    return "yeah gotcha";
-  }
-}
-
-// =========================
-// MAIN CALL FLOW
-// =========================
-app.all("/voice", async (req, res) => {
-  console.log("/voice hit");
-
-  const speech = req.body.SpeechResult || "";
-
-  console.log("USER:", speech);
-
-  const reply = await getAIResponse(speech);
-
-  console.log("AI:", reply);
-
-  // =========================
-  // ELEVENLABS TTS
-  // =========================
-  const tts = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
-    {
-      method: "POST",
-      headers: {
-        "xi-api-key": ELEVEN_KEY,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        text: reply,
-        model_id: "eleven_turbo_v2"
-      })
-    }
-  );
-
-  const audioBuffer = Buffer.from(await tts.arrayBuffer());
-  lastAudio = audioBuffer;
-
-  // =========================
-  // TWIML RESPONSE
-  // =========================
+app.all("/voice", (req, res) => {
   res.type("text/xml").send(`
 <Response>
-  <Play>https://${req.headers.host}/audio</Play>
-  <Gather input="speech" action="/voice" method="POST" timeout="3" />
+  <Dial>
+    <Sip>sip:realtime@${req.headers.host}</Sip>
+  </Dial>
 </Response>
   `);
 });
 
 // =========================
-// AUDIO ENDPOINT
+// REALTIME WS SERVER
 // =========================
-app.get("/audio", (req, res) => {
-  if (!lastAudio) return res.status(404).send("No audio");
+const wss = new WebSocket.Server({ noServer: true });
 
-  res.set({ "Content-Type": "audio/mpeg" });
-  res.send(lastAudio);
+server.on("upgrade", (req, socket, head) => {
+  if (req.url === "/realtime") {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+// =========================
+// AUDIO SESSION
+// =========================
+wss.on("connection", (ws) => {
+  console.log("REALTIME CONNECTED");
+
+  ws.on("message", (msg) => {
+    try {
+      const data = JSON.parse(msg);
+
+      // Twilio sends audio here
+      if (data.event === "media") {
+        // 🔥 FOR NOW: ECHO BACK AUDIO
+        ws.send(JSON.stringify({
+          event: "media",
+          media: {
+            payload: data.media.payload
+          }
+        }));
+      }
+
+    } catch (err) {
+      console.log("ERR:", err.message);
+    }
+  });
+
+  ws.on("close", () => {
+    console.log("REALTIME CLOSED");
+  });
 });
 
 // =========================
 // START
 // =========================
-const server = http.createServer(app);
-
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("RUNNING");
+  console.log("RUNNING REALTIME");
 });
