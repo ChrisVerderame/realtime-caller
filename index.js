@@ -35,38 +35,45 @@ const wss = new WebSocket.Server({ server });
 // AI
 // =========================
 async function getAIResponse(history) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": ANTHROPIC_KEY,
-      "content-type": "application/json",
-      "anthropic-version": "2023-06-01"
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-5",
-      max_tokens: 50,
-      temperature: 0.9,
-      system: `
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_KEY,
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 50,
+        temperature: 0.9,
+        system: `
 You are Jack from Blackline.
 
-Casual. Human. Short.
+Casual, human, short.
 
-1 sentence most of the time.
-Use fillers like "yeah", "honestly", "gotcha".
-Don't sound scripted.
+- 1 sentence most of the time
+- slightly messy wording
+- use fillers like "yeah", "honestly", "gotcha"
+- never sound scripted
 `,
-      messages: history
-    })
-  });
+        messages: history
+      })
+    });
 
-  const data = await res.json();
+    const data = await res.json();
 
-  let text = "";
-  for (const b of data.content || []) {
-    if (b.type === "text") text += b.text;
+    let text = "";
+    for (const b of data.content || []) {
+      if (b.type === "text") text += b.text;
+    }
+
+    return text.trim() || "yeah gotcha";
+
+  } catch (err) {
+    console.log("AI ERROR:", err.message);
+    return "yeah gotcha — makes sense";
   }
-
-  return text.trim() || "yeah gotcha";
 }
 
 // =========================
@@ -90,9 +97,17 @@ wss.on("connection", (ws) => {
 
   dg.on("open", () => console.log("DG CONNECTED"));
 
+  dg.on("error", (err) => {
+    console.log("DG ERROR:", err.message);
+  });
+
   dg.on("message", async (msg) => {
     try {
       const data = JSON.parse(msg);
+
+      // 🔥 ONLY FINAL TRANSCRIPTS
+      if (!data.is_final) return;
+
       const transcript = data.channel?.alternatives?.[0]?.transcript;
 
       if (!transcript || transcript.length < 2) return;
@@ -109,7 +124,7 @@ wss.on("connection", (ws) => {
       if (!streamReady) return;
 
       // =========================
-      // ELEVENLABS (FIXED)
+      // ELEVENLABS (BUFFERED FIX)
       // =========================
       const tts = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
@@ -129,7 +144,6 @@ wss.on("connection", (ws) => {
 
       const audioBuffer = await tts.arrayBuffer();
 
-      // 🔥 correct chunking
       const chunkSize = 320;
 
       for (let i = 0; i < audioBuffer.byteLength; i += chunkSize) {
@@ -144,17 +158,16 @@ wss.on("connection", (ws) => {
           }
         }));
 
-        // 🔥 pacing (critical)
         await new Promise(r => setTimeout(r, 20));
       }
 
     } catch (err) {
-      console.log("AI ERROR:", err.message);
+      console.log("DG MSG ERROR:", err.message);
     }
   });
 
   // =========================
-  // TWILIO AUDIO → DG
+  // TWILIO AUDIO → DEEPGRAM
   // =========================
   ws.on("message", (msg) => {
     try {
@@ -166,7 +179,9 @@ wss.on("connection", (ws) => {
       }
 
       if (data.event === "media") {
-        dg.send(Buffer.from(data.media.payload, "base64"));
+        if (dg.readyState === 1) {
+          dg.send(Buffer.from(data.media.payload, "base64"));
+        }
       }
 
     } catch (err) {
