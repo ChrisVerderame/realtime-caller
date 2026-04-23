@@ -1,15 +1,11 @@
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
-const ffmpeg = require("fluent-ffmpeg");
-const ffmpegPath = require("ffmpeg-static");
-const { Readable } = require("stream");
-
-ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
 const server = http.createServer(app);
 
+// ENV
 const DEEPGRAM_KEY = process.env.DEEPGRAM_KEY;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const ELEVEN_KEY = process.env.ELEVEN_KEY;
@@ -21,7 +17,7 @@ const VOICE_ID = process.env.VOICE_ID;
 app.get("/", (req, res) => res.send("OK"));
 
 // =========================
-// TWIML
+// TWIML ENTRY
 // =========================
 app.all("/voice", (req, res) => {
   res.type("text/xml").send(`
@@ -49,55 +45,75 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 // =========================
-// AI
+// μ-LAW CONVERSION (PURE JS)
+// =========================
+function linearToMulaw(sample) {
+  const MULAW_MAX = 0x1FFF;
+  const MULAW_BIAS = 33;
+
+  let sign = (sample >> 8) & 0x80;
+  if (sign) sample = -sample;
+
+  sample = Math.min(sample, MULAW_MAX);
+  sample += MULAW_BIAS;
+
+  let exponent = 7;
+  for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; expMask >>= 1) {
+    exponent--;
+  }
+
+  let mantissa = (sample >> (exponent + 3)) & 0x0F;
+  let mulaw = ~(sign | (exponent << 4) | mantissa);
+
+  return mulaw & 0xFF;
+}
+
+function pcm16ToMulaw(buffer) {
+  const out = Buffer.alloc(buffer.length / 2);
+
+  for (let i = 0, j = 0; i < buffer.length; i += 2, j++) {
+    const sample = buffer.readInt16LE(i);
+    out[j] = linearToMulaw(sample);
+  }
+
+  return out;
+}
+
+// =========================
+// AI RESPONSE
 // =========================
 async function getAIResponse(text) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": ANTHROPIC_KEY,
-      "content-type": "application/json",
-      "anthropic-version": "2023-06-01"
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-5",
-      max_tokens: 60,
-      temperature: 0.9,
-      system: "Casual, short, human.",
-      messages: [{ role: "user", content: text }]
-    })
-  });
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_KEY,
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 60,
+        temperature: 0.9,
+        system: "Casual, human, short responses.",
+        messages: [{ role: "user", content: text }]
+      })
+    });
 
-  const data = await res.json();
-  return data.content?.[0]?.text || "yeah gotcha";
+    const data = await res.json();
+    return data.content?.[0]?.text || "yeah gotcha";
+
+  } catch {
+    return "yeah gotcha";
+  }
 }
 
 // =========================
-// AUDIO CONVERSION
-// =========================
-function convertToMulaw(buffer) {
-  return new Promise((resolve, reject) => {
-    const stream = new Readable();
-    stream.push(buffer);
-    stream.push(null);
-
-    const chunks = [];
-
-    ffmpeg(stream)
-      .audioFrequency(8000)
-      .audioChannels(1)
-      .format("mulaw")
-      .on("error", reject)
-      .on("end", () => resolve(Buffer.concat(chunks)))
-      .pipe()
-      .on("data", (chunk) => chunks.push(chunk));
-  });
-}
-
-// =========================
-// REALTIME
+// REALTIME HANDLER
 // =========================
 wss.on("connection", (ws) => {
+  console.log("REALTIME CONNECTED");
+
   let streamSid = null;
 
   const dg = new WebSocket(
@@ -112,9 +128,12 @@ wss.on("connection", (ws) => {
     const transcript = data.channel?.alternatives?.[0]?.transcript;
     if (!transcript) return;
 
-    const reply = await getAIResponse(transcript);
+    console.log("USER:", transcript);
 
-    // 🔥 GET WAV (NOT ULaw)
+    const reply = await getAIResponse(transcript);
+    console.log("AI:", reply);
+
+    // 🔥 GET PCM AUDIO (NOT MP3)
     const tts = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
       {
@@ -125,15 +144,22 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           text: reply,
-          model_id: "eleven_turbo_v2"
+          model_id: "eleven_turbo_v2",
+          output_format: "pcm_16000"
         })
       }
     );
 
-    const rawAudio = Buffer.from(await tts.arrayBuffer());
+    const pcm = Buffer.from(await tts.arrayBuffer());
 
-    // 🔥 FORCE CONVERT (THIS FIXES STATIC)
-    const mulaw = await convertToMulaw(rawAudio);
+    // 🔥 DOWNSAMPLE 16k → 8k (simple skip)
+    const downsampled = Buffer.alloc(pcm.length / 2);
+    for (let i = 0, j = 0; j < downsampled.length; i += 4, j += 2) {
+      downsampled[j] = pcm[i];
+      downsampled[j + 1] = pcm[i + 1];
+    }
+
+    const mulaw = pcm16ToMulaw(downsampled);
 
     const chunkSize = 320;
 
@@ -173,5 +199,5 @@ wss.on("connection", (ws) => {
 // START
 // =========================
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("RUNNING FINAL REALTIME");
+  console.log("RUNNING CLEAN REALTIME");
 });
