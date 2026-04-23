@@ -70,7 +70,7 @@ wss.on("connection", (ws) => {
       const transcript = data.channel?.alternatives?.[0]?.transcript;
       if (!transcript) return;
 
-      // 🔥 ONLY FINAL TRANSCRIPTS
+      // ONLY final transcripts
       if (!data.is_final) return;
 
       // prevent duplicates
@@ -79,11 +79,10 @@ wss.on("connection", (ws) => {
 
       const now = Date.now();
 
-      // 🔥 debounce (prevents multiple rapid triggers)
+      // debounce
       if (now - lastResponseTime < 1200) return;
       lastResponseTime = now;
 
-      // prevent overlap
       if (isThinking) return;
       isThinking = true;
 
@@ -103,34 +102,44 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 18,
+          max_tokens: 60, // 🔥 FIXED (no more cut sentences)
           temperature: 0.9,
           system: `
 You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
 
-Start of call:
-- Ask if they filled out the form
-- Ask if they are the owner
-- Verify address
+This is the start of the call.
 
-If NOT owner:
-- Apologize and end call politely
+Speak like a real person:
+- casual
+- slightly imperfect
+- not overly structured
+- not robotic
 
-If owner:
-- Be casual and human
+Do NOT sound scripted.
+
+Opening:
+- confirm they filled something out about selling
+- ask if they are the owner
+- verify the address naturally
+
+If wrong person:
+- apologize briefly and end call
+
+If correct:
+- have a normal conversation
 
 Goal:
-- Set a quick in-person visit with Chris (the buyer)
+- if it makes sense, set a quick in-person visit with Chris (the buyer)
 
 Tone:
-- Normal guy, not salesy
-- Short responses
-- Low pressure
+- relaxed
+- conversational
+- not pushy
 
-Rules:
-- Never restart intro
-- Do not ask price or finances
-- Do not sound scripted
+Important:
+- use natural phrasing
+- short but complete thoughts
+- it's okay to say things like "yeah", "gotcha", "okay"
 `,
           messages: history.slice(-6)
         })
@@ -139,15 +148,12 @@ Rules:
       const aiData = await aiRes.json();
       let reply = aiData.content?.[0]?.text || "yeah";
 
-      // small natural filler
-      reply = "yeah—" + reply;
-
       console.log("AI:", reply);
 
       history.push({ role: "assistant", content: reply });
 
       // =========================
-      // ELEVENLABS (FINAL FIX)
+      // ELEVENLABS (FULL AUDIO FIX)
       // =========================
       const ttsRes = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}?output_format=mp3_44100_128`,
@@ -160,11 +166,11 @@ Rules:
           body: JSON.stringify({
             text: reply,
             model_id: "eleven_multilingual_v2",
-            optimize_streaming_latency: 0, // 🔥 critical
+            optimize_streaming_latency: 0,
             voice_settings: {
-              stability: 0.4,
-              similarity_boost: 0.8,
-              style: 0.3,
+              stability: 0.25,
+              similarity_boost: 0.75,
+              style: 0.4,
               use_speaker_boost: true
             }
           })
