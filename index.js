@@ -100,7 +100,7 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 40,
+          max_tokens: 60,
           temperature: 0.95,
           system: `
 You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
@@ -109,6 +109,8 @@ Speak like a real person on the phone:
 - casual, direct, slightly imperfect
 - not scripted, not overly polished
 - short, natural phrases
+- always finish your sentence naturally. Never cut off mid-though
+- Keep responses short, but always complete
 
 Write for voice, not text:
 - use contractions (I’m, we’re, that’s)
