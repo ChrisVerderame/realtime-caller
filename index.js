@@ -295,6 +295,39 @@ app.get("/test-leads", async (req, res) => {
 });
 
 // =========================
+// TWILIO VOICE WEBHOOK
+// =========================
+app.post("/twilio-voice", (req, res) => {
+  const VoiceResponse = require("twilio").twiml.VoiceResponse;
+  const twiml = new VoiceResponse();
+
+  const wsUrl = process.env.BASE_URL.replace("https", "wss");
+
+  twiml.connect().stream({
+    url: `${wsUrl}/`,
+  });
+
+  res.type("text/xml");
+  res.send(twiml.toString());
+});
+
+// =========================
+// START DIALING
+// =========================
+const { callLead } = require("./dialer");
+
+app.get("/start-dialing", async (req, res) => {
+  const leads = await getLeads();
+
+  for (const lead of leads) {
+    await callLead(lead);
+    await new Promise((r) => setTimeout(r, 20000));
+  }
+
+  res.send("Dialing started");
+});
+
+// =========================
 // START SERVER
 // =========================
 server.listen(process.env.PORT || 3000, () => {
