@@ -45,12 +45,12 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 // =========================
-// CONVERSATION HANDLER
+// CONVERSATION
 // =========================
 relayWss.on("connection", (ws) => {
   console.log("RELAY CONNECTED");
 
-  let hasOpened = false;
+  let started = false;
 
   const speak = (text) => {
     ws.send(JSON.stringify({
@@ -65,35 +65,33 @@ relayWss.on("connection", (ws) => {
       console.log("RAW:", data);
 
       // =========================
-      // CALL START
+      // FIRST PROMPT (OPENING)
       // =========================
-      if (data.type === "prompt" && !hasOpened) {
-        hasOpened = true;
+      if (data.type === "prompt" && !started) {
+        started = true;
 
-        speak("Hey — this is Jack from Blackline. Did you fill out something about your property?");
+        speak("Hey — this is Jack from Blackline. Did you fill something out about your property?");
         return;
       }
 
       // =========================
-      // USER SPEECH
+      // USER SPEECH (PROMPT AGAIN)
       // =========================
-      if (data.type === "input_text") {
-        const user = (data.text || "").toLowerCase();
+      if (data.type === "prompt" && started) {
+        const user = (data.voicePrompt || "").toLowerCase();
         console.log("USER:", user);
 
-        // 🔥 VERY SIMPLE NATURAL RESPONSES
         if (user.includes("yes")) {
-          speak("Gotcha — perfect. Chris is actually the guy that handles everything in person, he'd be happy to swing by and take a look.");
+          speak("Gotcha — perfect. Chris is actually the one who handles everything in person, he'd be happy to swing by and take a look.");
         } 
         else if (user.includes("no")) {
-          speak("Oh gotcha — I might have caught you at a weird time. No worries at all.");
+          speak("No worries at all — I might’ve just caught you at a bad time.");
         } 
-        else if (user.includes("who") || user.includes("what")) {
-          speak("Yeah — we're just local, we buy properties as-is. Nothing complicated.");
+        else if (user.includes("what") || user.includes("who")) {
+          speak("Yeah — we're just local, we buy properties as-is. Super simple process.");
         } 
         else {
-          // fallback = keeps convo flowing
-          speak("Yeah I hear you — honestly we keep it pretty simple, just wanted to see if it was something you'd consider.");
+          speak("Gotcha — yeah honestly we keep it simple, just wanted to see if it was something you'd consider.");
         }
       }
 
