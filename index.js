@@ -46,8 +46,11 @@ wss.on("connection", (ws) => {
   console.log("CALL CONNECTED");
 
   let history = [];
+  let streamReady = false; // 🔥 IMPORTANT
 
-  // 🔥 Deepgram STT
+  // =========================
+  // DEEPGRAM
+  // =========================
   const dg = new WebSocket(
     "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000",
     {
@@ -69,7 +72,7 @@ wss.on("connection", (ws) => {
       history.push({ role: "user", content: transcript });
 
       // =========================
-      // AI (Anthropic)
+      // AI
       // =========================
       const ai = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -115,7 +118,15 @@ Keep responses short.
       console.log("AI:", reply);
 
       // =========================
-      // ELEVENLABS (CORRECT FORMAT)
+      // WAIT UNTIL STREAM READY
+      // =========================
+      if (!streamReady) {
+        console.log("SKIPPING AUDIO — STREAM NOT READY");
+        return;
+      }
+
+      // =========================
+      // ELEVENLABS (μ-law)
       // =========================
       const tts = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
@@ -128,14 +139,16 @@ Keep responses short.
           body: JSON.stringify({
             text: reply,
             model_id: "eleven_turbo_v2",
-            output_format: "ulaw_8000" // 🔥 CRITICAL
+            output_format: "ulaw_8000"
           })
         }
       );
 
       const audioBuffer = await tts.arrayBuffer();
 
-      // 🔥 stream in chunks (required for Twilio)
+      // =========================
+      // SEND AUDIO IN CHUNKS
+      // =========================
       const chunkSize = 320;
 
       for (let i = 0; i < audioBuffer.byteLength; i += chunkSize) {
@@ -155,11 +168,16 @@ Keep responses short.
   });
 
   // =========================
-  // AUDIO → DEEPGRAM
+  // TWILIO AUDIO → DG
   // =========================
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
+
+      if (data.event === "start") {
+        console.log("STREAM READY");
+        streamReady = true;
+      }
 
       if (data.event === "media") {
         dg.send(Buffer.from(data.media.payload, "base64"));
