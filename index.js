@@ -85,7 +85,7 @@ wss.on("connection", (ws) => {
           system: `
 You are Jack from Blackline.
 
-Speak casually like a normal human.
+Speak casually like a real human.
 
 Goal:
 - build light rapport
@@ -94,7 +94,7 @@ Goal:
 Mention naturally:
 "Chris handles everything in person and can swing by"
 
-Keep replies short.
+Keep responses short.
 `,
           messages: history
         })
@@ -115,10 +115,10 @@ Keep replies short.
       console.log("AI:", reply);
 
       // =========================
-      // ELEVEN STREAM
+      // ELEVENLABS (FIXED AUDIO)
       // =========================
       const tts = await fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream`,
+        `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
         {
           method: "POST",
           headers: {
@@ -132,22 +132,20 @@ Keep replies short.
         }
       );
 
-      const reader = tts.body.getReader();
+      const audioBuffer = await tts.arrayBuffer();
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
+      // 🔥 SEND AUDIO BACK TO TWILIO
+      const base64Audio = Buffer.from(audioBuffer).toString("base64");
 
-        ws.send(JSON.stringify({
-          event: "media",
-          media: {
-            payload: Buffer.from(value).toString("base64")
-          }
-        }));
-      }
+      ws.send(JSON.stringify({
+        event: "media",
+        media: {
+          payload: base64Audio
+        }
+      }));
 
     } catch (err) {
-      console.log("AI ERROR", err);
+      console.log("AI ERROR:", err);
     }
   });
 
@@ -163,7 +161,7 @@ Keep replies short.
       }
 
     } catch (err) {
-      console.log("WS ERROR", err);
+      console.log("WS ERROR:", err);
     }
   });
 
