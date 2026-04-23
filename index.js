@@ -58,18 +58,25 @@ wss.on("connection", (ws) => {
     { headers: { Authorization: `Token ${process.env.DEEPGRAM_KEY}` } }
   );
 
+  let lastSpoken = "";
+
   dg.on("message", async (msg) => {
     const data = JSON.parse(msg);
 
-    if (!data.is_final) return;
+    const transcript = data.channel?.alternatives?.[0]?.transcript;
+    if (!transcript) return;
 
-    const text = data.channel?.alternatives?.[0]?.transcript;
-    if (!text) return;
+    // 🔥 allow partials (faster)
+    if (!data.is_final && transcript.length < 5) return;
 
-    console.log("USER:", text);
+    // prevent spam repeats
+    if (transcript === lastSpoken) return;
+    lastSpoken = transcript;
+
+    console.log("USER:", transcript);
 
     // =========================
-    // AI RESPONSE (IMPROVED)
+    // AI RESPONSE
     // =========================
     const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -80,24 +87,24 @@ wss.on("connection", (ws) => {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-5",
-        max_tokens: 25,
+        max_tokens: 15,
         temperature: 0.9,
         system: `
 You are Jack from Blackline.
 
 Speak like a real human on a phone call.
 Short, casual, slightly imperfect.
-Never sound robotic.
-Keep responses to 1 sentence.
+Never robotic.
+1 sentence max.
 `,
-        messages: [{ role: "user", content: text }]
+        messages: [{ role: "user", content: transcript }]
       })
     });
 
     const aiData = await aiRes.json();
     let reply = aiData.content?.[0]?.text || "yeah";
 
-    // 🔥 instant-feel trick
+    // 🔥 instant feel
     reply = "yeah—" + reply;
 
     console.log("AI:", reply);
@@ -128,7 +135,6 @@ Keep responses to 1 sentence.
 
     const audio = Buffer.from(await tts.arrayBuffer());
 
-    // send back to browser
     ws.send(audio.toString("base64"));
   });
 
