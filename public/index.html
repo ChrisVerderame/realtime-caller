@@ -10,38 +10,46 @@
   <script src="https://unpkg.com/livekit-client/dist/livekit-client.umd.js"></script>
 
 <script>
-  const btn = document.getElementById("startBtn");
+let ws;
 
-  btn.onclick = async () => {
-    try {
-      console.log("Starting...");
+document.getElementById("startBtn").onclick = async () => {
+  const res = await fetch("/token");
+  const data = await res.json();
 
-      const res = await fetch("/token");
-      const data = await res.json();
+  const room = new LivekitClient.Room();
+  await room.connect(data.url, data.token);
 
-      console.log("TOKEN:", data);
+  await room.localParticipant.setMicrophoneEnabled(true);
 
-      const room = new LivekitClient.Room();
+  // 🔥 CONNECT AI WS
+  ws = new WebSocket(`wss://${location.host}`);
 
-      await room.connect(data.url, data.token);
+  room.on("trackSubscribed", (track) => {
+    if (track.kind === "audio") {
+      const stream = new MediaStream([track.mediaStreamTrack]);
 
-      console.log("CONNECTED");
+      const processor = new MediaRecorder(stream);
 
-      // 🔥 FIXED MIC
-      await room.localParticipant.setMicrophoneEnabled(true);
-
-      room.on("trackSubscribed", (track) => {
-        if (track.kind === "audio") {
-          const audio = track.attach();
-          document.body.appendChild(audio);
+      processor.ondataavailable = (e) => {
+        if (ws.readyState === 1) {
+          e.data.arrayBuffer().then(buf => {
+            ws.send(buf);
+          });
         }
-      });
+      };
 
-    } catch (err) {
-      console.error("ERROR:", err);
-      alert("Check console");
+      processor.start(250);
     }
+  });
+
+  // 🔥 PLAY AI AUDIO
+  ws.onmessage = (msg) => {
+    const audio = new Audio(
+      "data:audio/mp3;base64," + msg.data
+    );
+    audio.play();
   };
+};
 </script>
 </body>
 </html>
