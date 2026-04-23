@@ -1,15 +1,17 @@
 const express = require("express");
 const http = require("http");
-const WebSocket = require("ws");
 
 const app = express();
-const server = http.createServer(app);
+app.use(express.urlencoded({ extended: true }));
 
-// ENV
-const DEEPGRAM_KEY = process.env.DEEPGRAM_KEY;
-const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const ELEVEN_KEY = process.env.ELEVEN_KEY;
 const VOICE_ID = process.env.VOICE_ID;
+const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
+
+// =========================
+// MEMORY (simple)
+// =========================
+let lastAudio = null;
 
 // =========================
 // HEALTH
@@ -17,35 +19,7 @@ const VOICE_ID = process.env.VOICE_ID;
 app.get("/", (req, res) => res.send("OK"));
 
 // =========================
-// TWIML ENTRY
-// =========================
-app.all("/voice", (req, res) => {
-  res.type("text/xml").send(`
-<Response>
-  <Connect>
-    <Stream url="wss://${req.headers.host}/realtime" />
-  </Connect>
-</Response>
-  `);
-});
-
-// =========================
-// WS SETUP
-// =========================
-const wss = new WebSocket.Server({ noServer: true });
-
-server.on("upgrade", (req, socket, head) => {
-  if (req.url === "/realtime") {
-    wss.handleUpgrade(req, socket, head, (ws) => {
-      wss.emit("connection", ws, req);
-    });
-  } else {
-    socket.destroy();
-  }
-});
-
-// =========================
-// AI
+// AI (FAST)
 // =========================
 async function getAIResponse(text) {
   try {
@@ -58,15 +32,28 @@ async function getAIResponse(text) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-5",
-        max_tokens: 50,
-        temperature: 0.9,
-        system: "Casual, human, short. One sentence.",
-        messages: [{ role: "user", content: text }]
+        max_tokens: 30, // 🔥 faster
+        temperature: 0.8,
+        system: `
+You are Jack from Blackline.
+
+Talk like a normal human.
+Short responses.
+1 sentence max.
+Never robotic.
+`,
+        messages: [{ role: "user", content: text || "hello" }]
       })
     });
 
     const data = await res.json();
-    return data.content?.[0]?.text || "yeah gotcha";
+
+    let output = "";
+    for (const b of data.content || []) {
+      if (b.type === "text") output += b.text;
+    }
+
+    return output.trim() || "yeah gotcha";
 
   } catch {
     return "yeah gotcha";
@@ -74,87 +61,62 @@ async function getAIResponse(text) {
 }
 
 // =========================
-// REALTIME
+// VOICE ROUTE
 // =========================
-wss.on("connection", (ws) => {
-  console.log("REALTIME CONNECTED");
+app.all("/voice", async (req, res) => {
+  const speech = req.body.SpeechResult || "";
 
-  let streamSid = null;
+  console.log("USER:", speech);
 
-  const dg = new WebSocket(
-    "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000",
-    { headers: { Authorization: `Token ${DEEPGRAM_KEY}` } }
+  const reply = await getAIResponse(speech);
+  console.log("AI:", reply);
+
+  // 🔥 ElevenLabs (fastest config)
+  const tts = await fetch(
+    `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
+    {
+      method: "POST",
+      headers: {
+        "xi-api-key": ELEVEN_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        text: reply,
+        model_id: "eleven_turbo_v2"
+      })
+    }
   );
 
-  dg.on("message", async (msg) => {
-    const data = JSON.parse(msg);
-    if (!data.is_final) return;
+  const buffer = Buffer.from(await tts.arrayBuffer());
+  lastAudio = buffer;
 
-    const transcript = data.channel?.alternatives?.[0]?.transcript;
-    if (!transcript) return;
+  res.type("text/xml").send(`
+<Response>
+  <Play>https://${req.headers.host}/audio</Play>
+  <Gather 
+    input="speech" 
+    action="/voice" 
+    method="POST"
+    timeout="1"
+    speechTimeout="auto"
+  />
+</Response>
+  `);
+});
 
-    console.log("USER:", transcript);
+// =========================
+// AUDIO
+// =========================
+app.get("/audio", (req, res) => {
+  if (!lastAudio) return res.status(404).send("No audio");
 
-    const reply = await getAIResponse(transcript);
-    console.log("AI:", reply);
-
-    // 🔥 GET ELEVENLABS AUDIO (ULAW)
-    const tts = await fetch(
-      `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
-      {
-        method: "POST",
-        headers: {
-          "xi-api-key": ELEVEN_KEY,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          text: reply,
-          model_id: "eleven_turbo_v2",
-          output_format: "ulaw_8000"
-        })
-      }
-    );
-
-    const audio = Buffer.from(await tts.arrayBuffer());
-
-    // 🔥 CLEAN CHUNKING
-    const chunkSize = 320;
-
-    for (let i = 0; i + chunkSize <= audio.length; i += chunkSize) {
-      if (ws.readyState !== 1 || !streamSid) break;
-
-      const chunk = audio.slice(i, i + chunkSize);
-
-      ws.send(JSON.stringify({
-        event: "media",
-        streamSid,
-        media: {
-          payload: chunk.toString("base64")
-        }
-      }));
-
-      await new Promise(r => setTimeout(r, 20));
-    }
-  });
-
-  ws.on("message", (msg) => {
-    const data = JSON.parse(msg);
-
-    if (data.event === "start") {
-      streamSid = data.streamSid;
-    }
-
-    if (data.event === "media" && dg.readyState === 1) {
-      dg.send(Buffer.from(data.media.payload, "base64"));
-    }
-  });
-
-  ws.on("close", () => dg.close());
+  res.set({ "Content-Type": "audio/mpeg" });
+  res.send(lastAudio);
 });
 
 // =========================
 // START
 // =========================
-server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("RUNNING FINAL");
+http.createServer(app).listen(process.env.PORT || 3000, "0.0.0.0", () => {
+  console.log("RUNNING FAST CLEAN VERSION");
 });
