@@ -12,9 +12,18 @@
   <script>
     let ws;
     let currentAudio = null;
+    let audioUnlocked = false;
 
     document.getElementById("startBtn").onclick = async () => {
       console.log("Starting...");
+
+      // 🔥 UNLOCK AUDIO (CRITICAL)
+      if (!audioUnlocked) {
+        const ctx = new AudioContext();
+        await ctx.resume();
+        audioUnlocked = true;
+        console.log("Audio unlocked");
+      }
 
       const res = await fetch("/token");
       const data = await res.json();
@@ -26,16 +35,12 @@
 
       console.log("MIC LIVE");
 
-      // =========================
-      // WEBSOCKET
-      // =========================
       ws = new WebSocket(`wss://${location.host}/`);
 
       ws.onopen = () => console.log("WS CONNECTED");
-      ws.onerror = (e) => console.error("WS ERROR", e);
 
       // =========================
-      // MIC PIPELINE (RAW PCM)
+      // MIC PIPELINE
       // =========================
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -46,7 +51,6 @@
 
       source.connect(processor);
 
-      // 🔥 silent output (prevents echo but keeps processing alive)
       const silentGain = audioContext.createGain();
       silentGain.gain.value = 0;
 
@@ -56,7 +60,6 @@
       processor.onaudioprocess = (e) => {
         if (ws.readyState !== 1) return;
 
-        // 🔥 interrupt AI if user speaks
         if (currentAudio) {
           currentAudio.pause();
           currentAudio = null;
@@ -76,12 +79,11 @@
       };
 
       // =========================
-      // PLAY AI AUDIO
+      // PLAY AI AUDIO (FIXED)
       // =========================
       ws.onmessage = (msg) => {
         console.log("AI AUDIO RECEIVED");
 
-        // 🔥 stop previous audio
         if (currentAudio) {
           currentAudio.pause();
           currentAudio = null;
@@ -92,7 +94,10 @@
         );
 
         currentAudio = audio;
-        audio.play();
+
+        audio.play().catch(err => {
+          console.error("Playback blocked:", err);
+        });
       };
     };
   </script>
