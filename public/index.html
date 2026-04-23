@@ -13,6 +13,8 @@
 let ws;
 
 document.getElementById("startBtn").onclick = async () => {
+  console.log("Starting...");
+
   const res = await fetch("/token");
   const data = await res.json();
 
@@ -21,29 +23,29 @@ document.getElementById("startBtn").onclick = async () => {
 
   await room.localParticipant.setMicrophoneEnabled(true);
 
+  console.log("MIC LIVE");
+
   // 🔥 CONNECT AI WS
   ws = new WebSocket(`wss://${location.host}`);
 
-  room.on("trackSubscribed", (track) => {
-    if (track.kind === "audio") {
-      const stream = new MediaStream([track.mediaStreamTrack]);
+  // 🔥 GET YOUR MIC DIRECTLY
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-      const processor = new MediaRecorder(stream);
+  const recorder = new MediaRecorder(stream);
 
-      processor.ondataavailable = (e) => {
-        if (ws.readyState === 1) {
-          e.data.arrayBuffer().then(buf => {
-            ws.send(buf);
-          });
-        }
-      };
-
-      processor.start(250);
+  recorder.ondataavailable = async (e) => {
+    if (ws.readyState === 1) {
+      const buf = await e.data.arrayBuffer();
+      ws.send(buf);
     }
-  });
+  };
 
-  // 🔥 PLAY AI AUDIO
+  recorder.start(250);
+
+  // 🔥 PLAY AI RESPONSE
   ws.onmessage = (msg) => {
+    console.log("AI AUDIO RECEIVED");
+
     const audio = new Audio(
       "data:audio/mp3;base64," + msg.data
     );
