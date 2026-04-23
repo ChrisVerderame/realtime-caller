@@ -64,33 +64,33 @@ wss.on("connection", (ws) => {
   );
 
   dg.on("message", async (msg) => {
-    const data = JSON.parse(msg);
-
-    const transcript = data.channel?.alternatives?.[0]?.transcript;
-    if (!transcript) return;
-
-    // ✅ ONLY FINAL TRANSCRIPTS
-    if (!data.is_final) return;
-
-    // prevent duplicates
-    if (transcript === lastSpoken) return;
-    lastSpoken = transcript;
-
-    const now = Date.now();
-
-    // 🔥 HARD DEBOUNCE (prevents double triggers)
-    if (now - lastResponseTime < 1500) return;
-    lastResponseTime = now;
-
-    // prevent overlap
-    if (isThinking) return;
-    isThinking = true;
-
-    console.log("USER:", transcript);
-
-    history.push({ role: "user", content: transcript });
-
     try {
+      const data = JSON.parse(msg);
+
+      const transcript = data.channel?.alternatives?.[0]?.transcript;
+      if (!transcript) return;
+
+      // 🔥 ONLY FINAL TRANSCRIPTS
+      if (!data.is_final) return;
+
+      // prevent duplicates
+      if (transcript === lastSpoken) return;
+      lastSpoken = transcript;
+
+      const now = Date.now();
+
+      // 🔥 debounce (prevents multiple rapid triggers)
+      if (now - lastResponseTime < 1200) return;
+      lastResponseTime = now;
+
+      // prevent overlap
+      if (isThinking) return;
+      isThinking = true;
+
+      console.log("USER:", transcript);
+
+      history.push({ role: "user", content: transcript });
+
       // =========================
       // AI RESPONSE
       // =========================
@@ -103,41 +103,34 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 15,
+          max_tokens: 18,
           temperature: 0.9,
           system: `
 You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
 
-This is the start of the call.
-
-Your job:
-- Confirm they filled out the form
+Start of call:
+- Ask if they filled out the form
 - Ask if they are the owner
-- Verify the property address
+- Verify address
 
-If NOT the owner:
+If NOT owner:
 - Apologize and end call politely
 
 If owner:
-- Have a normal, low-pressure conversation
+- Be casual and human
 
 Goal:
-- If it makes sense, set a quick in-person visit with Chris (the buyer)
+- Set a quick in-person visit with Chris (the buyer)
 
 Tone:
-- Normal local person
-- Not salesy
-- Casual, human
+- Normal guy, not salesy
 - Short responses
+- Low pressure
 
 Rules:
-- NEVER restart intro
-- DO NOT push
-- DO NOT ask price or finances
-
-Appointments:
-- “Chris can swing by real quick”
-- Keep it low pressure
+- Never restart intro
+- Do not ask price or finances
+- Do not sound scripted
 `,
           messages: history.slice(-6)
         })
@@ -146,6 +139,7 @@ Appointments:
       const aiData = await aiRes.json();
       let reply = aiData.content?.[0]?.text || "yeah";
 
+      // small natural filler
       reply = "yeah—" + reply;
 
       console.log("AI:", reply);
@@ -153,10 +147,10 @@ Appointments:
       history.push({ role: "assistant", content: reply });
 
       // =========================
-      // ELEVENLABS (FULL BUFFER FIX)
+      // ELEVENLABS (FINAL FIX)
       // =========================
       const ttsRes = await fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}`,
+        `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}?output_format=mp3_44100_128`,
         {
           method: "POST",
           headers: {
@@ -166,35 +160,27 @@ Appointments:
           body: JSON.stringify({
             text: reply,
             model_id: "eleven_multilingual_v2",
+            optimize_streaming_latency: 0, // 🔥 critical
             voice_settings: {
-              stability: 0.3,
-              similarity_boost: 0.7,
-              style: 0.2,
+              stability: 0.4,
+              similarity_boost: 0.8,
+              style: 0.3,
               use_speaker_boost: true
             }
           })
         }
       );
 
-      // 🔥 FULL STREAM READ (prevents cut sentences)
-      const chunks = [];
-      const reader = ttsRes.body.getReader();
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-      }
-
-      const audioBuffer = Buffer.concat(chunks);
+      const arrayBuffer = await ttsRes.arrayBuffer();
+      const audioBuffer = Buffer.from(arrayBuffer);
 
       ws.send(audioBuffer.toString("base64"));
 
     } catch (err) {
-      console.error("AI ERROR:", err);
+      console.error("PROCESS ERROR:", err);
+    } finally {
+      isThinking = false;
     }
-
-    isThinking = false;
   });
 
   ws.on("message", (msg) => {
