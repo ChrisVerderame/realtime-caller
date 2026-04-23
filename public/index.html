@@ -25,12 +25,17 @@
 
       console.log("MIC LIVE");
 
-      // 🔥 CONNECT WS
+      // =========================
+      // WEBSOCKET
+      // =========================
       ws = new WebSocket(`wss://${location.host}/`);
 
       ws.onopen = () => console.log("WS CONNECTED");
+      ws.onerror = (e) => console.error("WS ERROR", e);
 
-      // 🔥 RAW AUDIO PIPELINE
+      // =========================
+      // MIC → RAW PCM AUDIO
+      // =========================
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
       const audioContext = new AudioContext({ sampleRate: 48000 });
@@ -40,7 +45,12 @@
 
       source.connect(processor);
 
-      // ❌ IMPORTANT: DO NOT CONNECT TO DESTINATION (prevents echo)
+      // 🔥 CRITICAL FIX: silent output so processor runs (no echo)
+      const silentGain = audioContext.createGain();
+      silentGain.gain.value = 0;
+
+      processor.connect(silentGain);
+      silentGain.connect(audioContext.destination);
 
       processor.onaudioprocess = (e) => {
         if (ws.readyState !== 1) return;
@@ -58,8 +68,12 @@
         ws.send(buffer);
       };
 
-      // 🔥 PLAY AI RESPONSE
+      // =========================
+      // PLAY AI AUDIO
+      // =========================
       ws.onmessage = (msg) => {
+        console.log("AI AUDIO RECEIVED");
+
         const audio = new Audio(
           "data:audio/mp3;base64," + msg.data
         );
