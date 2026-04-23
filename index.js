@@ -1,38 +1,25 @@
 const express = require("express");
-const http = require("http");
-const WebSocket = require("ws");
 
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
 
-// REQUIRED for Twilio POST
-app.use(express.urlencoded({ extended: true }));
-
-// ✅ HEALTH CHECK (IMPORTANT)
+// health check
 app.get("/", (req, res) => {
-  res.send("SERVER RUNNING");
+  res.send("OK");
 });
 
-// ✅ TWILIO ROUTE (SAFE)
+// twilio test route
 app.all("/voice", (req, res) => {
-  console.log("VOICE HIT");
-
-  res.set("Content-Type", "text/xml");
-
-  res.send(`
+  res.type("text/xml").send(`
 <Response>
-  <Say>Connected</Say>
+  <Say>It works</Say>
 </Response>
   `);
 });
 
-// ✅ WEBSOCKET (we'll use later)
-wss.on("connection", (ws) => {
-  console.log("WS CONNECTED");
-});
+// IMPORTANT: use Railway port
+const PORT = process.env.PORT || 3000;
 
-// ✅ START SERVER (RAILWAY SAFE)
-server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("RUNNING");
+// IMPORTANT: bind 0.0.0.0
+app.listen(PORT, "0.0.0.0", () => {
+  console.log("Server running on port", PORT);
 });
