@@ -37,9 +37,10 @@
       ws = new WebSocket(`wss://${location.host}/`);
 
       ws.onopen = () => console.log("WS CONNECTED");
+      ws.onerror = (e) => console.error("WS ERROR", e);
 
       // =========================
-      // MIC PIPELINE
+      // MIC PIPELINE (RAW PCM)
       // =========================
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -50,7 +51,7 @@
 
       source.connect(processor);
 
-      // silent output so processor runs (no echo)
+      // 🔥 silent output (keeps processor alive, no echo)
       const silentGain = audioContext.createGain();
       silentGain.gain.value = 0;
 
@@ -60,14 +61,23 @@
       processor.onaudioprocess = (e) => {
         if (ws.readyState !== 1) return;
 
-        // interrupt AI if user talks
-        if (currentAudio) {
+        const input = e.inputBuffer.getChannelData(0);
+
+        // 🔥 detect real speaking (prevents instant cutoff)
+        let sum = 0;
+        for (let i = 0; i < input.length; i++) {
+          sum += Math.abs(input[i]);
+        }
+        const volume = sum / input.length;
+
+        // 🔥 only interrupt if user is ACTUALLY speaking
+        if (volume > 0.02 && currentAudio) {
+          console.log("INTERRUPT");
           currentAudio.pause();
           currentAudio = null;
         }
 
-        const input = e.inputBuffer.getChannelData(0);
-
+        // convert float → int16
         const buffer = new ArrayBuffer(input.length * 2);
         const view = new DataView(buffer);
 
@@ -101,7 +111,7 @@
 
         const byteArray = new Uint8Array(byteNumbers);
 
-        // create blob
+        // blob playback (reliable)
         const blob = new Blob([byteArray], { type: "audio/mpeg" });
         const url = URL.createObjectURL(blob);
 
