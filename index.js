@@ -46,7 +46,7 @@ wss.on("connection", (ws) => {
   console.log("CALL CONNECTED");
 
   let history = [];
-  let streamReady = false; // 🔥 IMPORTANT
+  let streamReady = false;
 
   // =========================
   // DEEPGRAM
@@ -126,7 +126,7 @@ Keep responses short.
       }
 
       // =========================
-      // ELEVENLABS (μ-law)
+      // ELEVENLABS μ-LAW
       // =========================
       const tts = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
@@ -147,7 +147,7 @@ Keep responses short.
       const audioBuffer = await tts.arrayBuffer();
 
       // =========================
-      // SEND AUDIO IN CHUNKS
+      // STREAM AUDIO WITH TIMING
       // =========================
       const chunkSize = 320;
 
@@ -160,6 +160,9 @@ Keep responses short.
             payload: Buffer.from(chunk).toString("base64")
           }
         }));
+
+        // 🔥 CRITICAL FIX (REAL-TIME PACING)
+        await new Promise((r) => setTimeout(r, 20));
       }
 
     } catch (err) {
@@ -168,7 +171,7 @@ Keep responses short.
   });
 
   // =========================
-  // TWILIO AUDIO → DG
+  // TWILIO AUDIO → DEEPGRAM
   // =========================
   ws.on("message", (msg) => {
     try {
