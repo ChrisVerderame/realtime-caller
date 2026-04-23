@@ -1,14 +1,20 @@
 const express = require("express");
 const http = require("http");
+const path = require("path");
 const { AccessToken } = require("livekit-server-sdk");
 
 const app = express();
 
 // =========================
+// SERVE FRONTEND
+// =========================
+app.use(express.static(path.join(__dirname, "public")));
+
+// =========================
 // HEALTH
 // =========================
 app.get("/", (req, res) => {
-  res.send("LIVEKIT READY");
+  res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 // =========================
@@ -35,7 +41,6 @@ app.get("/token", async (req, res) => {
       canSubscribe: true
     });
 
-    // 🔥 IMPORTANT FIX
     const token = await at.toJwt();
 
     res.json({
@@ -56,5 +61,5 @@ app.get("/token", async (req, res) => {
 http
   .createServer(app)
   .listen(process.env.PORT || 3000, "0.0.0.0", () => {
-    console.log("LIVEKIT TOKEN SERVER RUNNING");
+    console.log("LIVEKIT + CLIENT SERVER RUNNING");
   });
