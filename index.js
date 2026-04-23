@@ -48,6 +48,11 @@ wss.on("connection", (ws) => {
   let history = [];
   let streamReady = false;
 
+  // 🔥 Safety: log socket errors
+  ws.on("error", (err) => {
+    console.log("WS CONNECTION ERROR:", err.message);
+  });
+
   // =========================
   // DEEPGRAM
   // =========================
@@ -147,11 +152,17 @@ Keep responses short.
       const audioBuffer = await tts.arrayBuffer();
 
       // =========================
-      // STREAM AUDIO WITH TIMING
+      // STREAM AUDIO (FIXED)
       // =========================
       const chunkSize = 320;
 
       for (let i = 0; i < audioBuffer.byteLength; i += chunkSize) {
+        // 🔥 CRITICAL: only send if socket is OPEN
+        if (ws.readyState !== 1) {
+          console.log("WS NOT OPEN — STOPPING AUDIO");
+          break;
+        }
+
         const chunk = audioBuffer.slice(i, i + chunkSize);
 
         ws.send(JSON.stringify({
@@ -161,7 +172,7 @@ Keep responses short.
           }
         }));
 
-        // 🔥 CRITICAL FIX (REAL-TIME PACING)
+        // 🔥 pacing (required)
         await new Promise((r) => setTimeout(r, 20));
       }
 
