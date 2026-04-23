@@ -8,7 +8,6 @@ const ELEVEN_KEY = process.env.ELEVEN_KEY;
 const VOICE_ID = process.env.VOICE_ID;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 
-// store last audio
 let lastAudio = null;
 
 // =========================
@@ -17,7 +16,7 @@ let lastAudio = null;
 app.get("/", (req, res) => res.send("OK"));
 
 // =========================
-// AI RESPONSE (FAST)
+// AI (FASTER)
 // =========================
 async function getAIResponse(text) {
   try {
@@ -30,13 +29,13 @@ async function getAIResponse(text) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-5",
-        max_tokens: 30,
+        max_tokens: 25, // 🔥 faster
         temperature: 0.8,
         system: `
 You are Jack from Blackline.
 
-Speak casually like a real person.
-Short, natural, one sentence responses.
+Casual, quick, human.
+1 sentence max.
 `,
         messages: [{ role: "user", content: text || "hello" }]
       })
@@ -57,7 +56,7 @@ Short, natural, one sentence responses.
 }
 
 // =========================
-// VOICE ROUTE
+// VOICE LOOP
 // =========================
 app.all("/voice", async (req, res) => {
   const speech = req.body.SpeechResult || "";
@@ -67,7 +66,6 @@ app.all("/voice", async (req, res) => {
   const reply = await getAIResponse(speech);
   console.log("AI:", reply);
 
-  // 🔥 ElevenLabs request (stable MP3)
   const tts = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
     {
@@ -90,25 +88,28 @@ app.all("/voice", async (req, res) => {
   const buffer = Buffer.from(await tts.arrayBuffer());
   lastAudio = buffer;
 
-  // 🔥 cache buster (VERY IMPORTANT)
   const audioUrl = `https://${req.headers.host}/audio?ts=${Date.now()}`;
 
   res.type("text/xml").send(`
 <Response>
   <Play>${audioUrl}</Play>
+
   <Gather 
     input="speech"
     action="/voice"
     method="POST"
-    timeout="1"
+    timeout="2"
     speechTimeout="auto"
   />
+
+  <!-- 🔥 THIS KEEPS CALL ALIVE -->
+  <Redirect>/voice</Redirect>
 </Response>
   `);
 });
 
 // =========================
-// AUDIO ROUTE (FIXED)
+// AUDIO
 // =========================
 app.get("/audio", (req, res) => {
   if (!lastAudio) return res.status(404).send("No audio");
@@ -126,5 +127,5 @@ app.get("/audio", (req, res) => {
 // START
 // =========================
 http.createServer(app).listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("RUNNING CLEAN AUDIO BUILD");
+  console.log("RUNNING STABLE LOOP");
 });
