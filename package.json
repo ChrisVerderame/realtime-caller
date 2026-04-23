@@ -2,12 +2,11 @@
   "name": "livekit-ai-caller",
   "version": "1.0.0",
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "livekit-server-sdk": "^2.7.2"
+    "livekit-server-sdk": "^2.8.0"
   }
 }
