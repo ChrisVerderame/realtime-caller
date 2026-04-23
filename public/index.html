@@ -12,18 +12,14 @@
   <script>
     let ws;
     let currentAudio = null;
-    let audioUnlocked = false;
 
     document.getElementById("startBtn").onclick = async () => {
       console.log("Starting...");
 
-      // 🔥 UNLOCK AUDIO (CRITICAL)
-      if (!audioUnlocked) {
-        const ctx = new AudioContext();
-        await ctx.resume();
-        audioUnlocked = true;
-        console.log("Audio unlocked");
-      }
+      // 🔥 unlock audio
+      const unlockCtx = new AudioContext();
+      await unlockCtx.resume();
+      console.log("Audio unlocked");
 
       const res = await fetch("/token");
       const data = await res.json();
@@ -35,6 +31,9 @@
 
       console.log("MIC LIVE");
 
+      // =========================
+      // WEBSOCKET
+      // =========================
       ws = new WebSocket(`wss://${location.host}/`);
 
       ws.onopen = () => console.log("WS CONNECTED");
@@ -51,6 +50,7 @@
 
       source.connect(processor);
 
+      // silent output so processor runs (no echo)
       const silentGain = audioContext.createGain();
       silentGain.gain.value = 0;
 
@@ -60,6 +60,7 @@
       processor.onaudioprocess = (e) => {
         if (ws.readyState !== 1) return;
 
+        // interrupt AI if user talks
         if (currentAudio) {
           currentAudio.pause();
           currentAudio = null;
@@ -84,44 +85,31 @@
       ws.onmessage = (msg) => {
         console.log("AI AUDIO RECEIVED");
 
+        // stop previous audio
         if (currentAudio) {
           currentAudio.pause();
           currentAudio = null;
         }
 
-        ws.onmessage = async (msg) => {
-  console.log("AI AUDIO RECEIVED");
+        // base64 → binary
+        const byteCharacters = atob(msg.data);
+        const byteNumbers = new Array(byteCharacters.length);
 
-  if (currentAudio) {
-    currentAudio.pause();
-    currentAudio = null;
-  }
+        for (let i = 0; i < byteCharacters.length; i++) {
+          byteNumbers[i] = byteCharacters.charCodeAt(i);
+        }
 
-  // 🔥 convert base64 → binary
-  const byteCharacters = atob(msg.data);
-  const byteNumbers = new Array(byteCharacters.length);
+        const byteArray = new Uint8Array(byteNumbers);
 
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i);
-  }
+        // create blob
+        const blob = new Blob([byteArray], { type: "audio/mpeg" });
+        const url = URL.createObjectURL(blob);
 
-  const byteArray = new Uint8Array(byteNumbers);
-
-  // 🔥 create proper audio blob
-  const blob = new Blob([byteArray], { type: "audio/mpeg" });
-  const url = URL.createObjectURL(blob);
-
-  const audio = new Audio(url);
-  currentAudio = audio;
-
-  audio.play().catch(err => {
-    console.error("Playback error:", err);
-  });
-};
+        const audio = new Audio(url);
         currentAudio = audio;
 
         audio.play().catch(err => {
-          console.error("Playback blocked:", err);
+          console.error("Playback error:", err);
         });
       };
     };
