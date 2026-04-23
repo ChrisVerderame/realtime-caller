@@ -4,16 +4,10 @@ const { AccessToken } = require("livekit-server-sdk");
 
 const app = express();
 
-// =========================
-// HEALTH
-// =========================
 app.get("/", (req, res) => {
   res.send("LIVEKIT READY");
 });
 
-// =========================
-// TOKEN ENDPOINT
-// =========================
 app.get("/token", (req, res) => {
   const room = "call-room";
 
@@ -29,25 +23,18 @@ app.get("/token", (req, res) => {
 
   at.addGrant({
     roomJoin: true,
-    room: room,
+    room,
     canPublish: true,
     canSubscribe: true
   });
 
-  const token = at.toJwt();
-
   res.json({
-    token,
+    token: at.toJwt(),
     url: process.env.LIVEKIT_URL,
     room
   });
 });
 
-// =========================
-// START SERVER
-// =========================
-http
-  .createServer(app)
-  .listen(process.env.PORT || 3000, "0.0.0.0", () => {
-    console.log("LIVEKIT TOKEN SERVER RUNNING");
-  });
+http.createServer(app).listen(process.env.PORT || 3000, "0.0.0.0", () => {
+  console.log("LIVEKIT TOKEN SERVER RUNNING");
+});
