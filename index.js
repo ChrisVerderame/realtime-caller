@@ -5,13 +5,19 @@ const WebSocket = require("ws");
 const app = express();
 const server = http.createServer(app);
 
+// ENV
+const DEEPGRAM_KEY = process.env.DEEPGRAM_KEY;
+const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
+const ELEVEN_KEY = process.env.ELEVEN_KEY;
+const VOICE_ID = process.env.VOICE_ID;
+
 // =========================
 // HEALTH
 // =========================
 app.get("/", (req, res) => res.send("OK"));
 
 // =========================
-// SIP ENTRY → TWIML
+// TWIML ENTRY
 // =========================
 app.all("/voice", (req, res) => {
   res.type("text/xml").send(`
@@ -24,7 +30,7 @@ app.all("/voice", (req, res) => {
 });
 
 // =========================
-// WS SERVER (REALTIME)
+// WS SETUP
 // =========================
 const wss = new WebSocket.Server({ noServer: true });
 
@@ -39,53 +45,128 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 // =========================
-// REALTIME AUDIO HANDLER
+// AI CALL
+// =========================
+async function getAIResponse(text) {
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": ANTHROPIC_KEY,
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-5",
+      max_tokens: 60,
+      temperature: 0.9,
+      system: `
+You are Jack from Blackline.
+
+Casual, fast, human.
+1 sentence responses.
+Never sound scripted.
+`,
+      messages: [{ role: "user", content: text }]
+    })
+  });
+
+  const data = await res.json();
+
+  let output = "";
+  for (const b of data.content || []) {
+    if (b.type === "text") output += b.text;
+  }
+
+  return output.trim() || "yeah gotcha";
+}
+
+// =========================
+// REALTIME HANDLER
 // =========================
 wss.on("connection", (ws) => {
   console.log("REALTIME CONNECTED");
 
   let streamSid = null;
 
-  ws.on("message", (msg) => {
-    try {
-      const data = JSON.parse(msg);
+  // 🔥 Deepgram live
+  const dg = new WebSocket(
+    "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000",
+    { headers: { Authorization: `Token ${DEEPGRAM_KEY}` } }
+  );
 
-      // 🔥 capture streamSid
-      if (data.event === "start") {
-        streamSid = data.streamSid;
-        console.log("STREAM STARTED:", streamSid);
+  dg.on("message", async (msg) => {
+    const data = JSON.parse(msg);
+
+    if (!data.is_final) return;
+
+    const transcript = data.channel?.alternatives?.[0]?.transcript;
+    if (!transcript) return;
+
+    console.log("USER:", transcript);
+
+    const reply = await getAIResponse(transcript);
+    console.log("AI:", reply);
+
+    // 🔥 ElevenLabs streaming
+    const tts = await fetch(
+      `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream`,
+      {
+        method: "POST",
+        headers: {
+          "xi-api-key": ELEVEN_KEY,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          text: reply,
+          model_id: "eleven_turbo_v2",
+          output_format: "ulaw_8000"
+        })
       }
+    );
 
-      // 🔥 echo audio back (FIXED)
-      if (data.event === "media") {
-        if (ws.readyState === 1 && streamSid) {
-          ws.send(JSON.stringify({
-            event: "media",
-            streamSid: streamSid,
-            media: {
-              payload: data.media.payload
-            }
-          }));
+    const reader = tts.body.getReader();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      if (ws.readyState !== 1 || !streamSid) break;
+
+      ws.send(JSON.stringify({
+        event: "media",
+        streamSid,
+        media: {
+          payload: Buffer.from(value).toString("base64")
         }
-      }
+      }));
 
-    } catch (err) {
-      console.log("ERROR:", err.message);
+      await new Promise(r => setTimeout(r, 20));
+    }
+  });
+
+  ws.on("message", (msg) => {
+    const data = JSON.parse(msg);
+
+    if (data.event === "start") {
+      streamSid = data.streamSid;
+    }
+
+    if (data.event === "media") {
+      if (dg.readyState === 1) {
+        dg.send(Buffer.from(data.media.payload, "base64"));
+      }
     }
   });
 
   ws.on("close", () => {
+    dg.close();
     console.log("REALTIME CLOSED");
-  });
-
-  ws.on("error", (err) => {
-    console.log("WS ERROR:", err.message);
   });
 });
 
 // =========================
-// START SERVER
+// START
 // =========================
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("RUNNING REALTIME");
+  console.log("RUNNING REALTIME AI");
 });
