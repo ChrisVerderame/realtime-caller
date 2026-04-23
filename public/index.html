@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>AI Caller</title>
+</head>
+<body>
+  <h1>Real-Time AI Caller</h1>
+  <button onclick="start()">Start Call</button>
+
+  <script type="module">
+    import { connect } from "https://cdn.skypack.dev/livekit-client";
+
+    let room;
+
+    async function start() {
+      const res = await fetch("/token");
+      const data = await res.json();
+
+      room = await connect(data.url, data.token);
+
+      console.log("CONNECTED");
+
+      // mic input
+      await room.localParticipant.enableCameraAndMicrophone();
+
+      room.on("trackSubscribed", (track) => {
+        if (track.kind === "audio") {
+          const audio = track.attach();
+          document.body.appendChild(audio);
+        }
+      });
+    }
+
+    window.start = start;
+  </script>
+</body>
+</html>
