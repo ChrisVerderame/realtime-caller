@@ -6,6 +6,11 @@ const app = express();
 app.use(express.urlencoded({ extended: true }));
 
 // =========================
+// ENV
+// =========================
+const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
+
+// =========================
 // HEALTH
 // =========================
 app.get("/", (req, res) => {
@@ -45,11 +50,76 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 // =========================
+// AI CALL FUNCTION
+// =========================
+async function getAIResponse(history) {
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_KEY,
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 80,
+        temperature: 0.7,
+        system: `
+You are Jack from Blackline Acquisitions.
+
+You are calling about a property the person submitted.
+
+STYLE:
+- casual
+- human
+- slightly imperfect
+- NOT robotic
+- short responses (1–2 sentences max)
+
+RULES:
+- never ask for address
+- never ask about mortgage or price
+- don't interrogate
+- react naturally like a human
+
+GOAL:
+- build light rapport
+- move toward setting up Chris to see the property
+
+IMPORTANT:
+- don't repeat yourself
+- don't sound scripted
+- sometimes just react without asking a question
+`,
+        messages: history
+      })
+    });
+
+    const data = await res.json();
+
+    let text = "";
+    if (data?.content) {
+      for (const block of data.content) {
+        if (block.type === "text") text += block.text;
+      }
+    }
+
+    return text.trim();
+
+  } catch (err) {
+    console.log("AI ERROR:", err.message);
+    return "yeah gotcha — that makes sense";
+  }
+}
+
+// =========================
 // CONVERSATION
 // =========================
 relayWss.on("connection", (ws) => {
   console.log("RELAY CONNECTED");
 
+  let history = [];
   let started = false;
 
   const speak = (text) => {
@@ -59,40 +129,38 @@ relayWss.on("connection", (ws) => {
     }));
   };
 
-  ws.on("message", (msg) => {
+  ws.on("message", async (msg) => {
     try {
       const data = JSON.parse(msg);
       console.log("RAW:", data);
 
       // =========================
-      // FIRST PROMPT (OPENING)
+      // START CALL
       // =========================
       if (data.type === "prompt" && !started) {
         started = true;
 
-        speak("Hey — this is Jack from Blackline. Did you fill something out about your property?");
+        const opening = "Hey — this is Jack from Blackline. Did you fill something out about your property?";
+        
+        history.push({ role: "assistant", content: opening });
+        speak(opening);
         return;
       }
 
       // =========================
-      // USER SPEECH (PROMPT AGAIN)
+      // USER SPEECH
       // =========================
       if (data.type === "prompt" && started) {
-        const user = (data.voicePrompt || "").toLowerCase();
-        console.log("USER:", user);
+        const userText = data.voicePrompt || "";
+        console.log("USER:", userText);
 
-        if (user.includes("yes")) {
-          speak("Gotcha — perfect. Chris is actually the one who handles everything in person, he'd be happy to swing by and take a look.");
-        } 
-        else if (user.includes("no")) {
-          speak("No worries at all — I might’ve just caught you at a bad time.");
-        } 
-        else if (user.includes("what") || user.includes("who")) {
-          speak("Yeah — we're just local, we buy properties as-is. Super simple process.");
-        } 
-        else {
-          speak("Gotcha — yeah honestly we keep it simple, just wanted to see if it was something you'd consider.");
-        }
+        history.push({ role: "user", content: userText });
+
+        const aiReply = await getAIResponse(history);
+
+        history.push({ role: "assistant", content: aiReply });
+
+        speak(aiReply);
       }
 
     } catch (err) {
