@@ -11,6 +11,7 @@
 
   <script>
     let ws;
+    let currentAudio = null;
 
     document.getElementById("startBtn").onclick = async () => {
       console.log("Starting...");
@@ -34,7 +35,7 @@
       ws.onerror = (e) => console.error("WS ERROR", e);
 
       // =========================
-      // MIC → RAW PCM AUDIO
+      // MIC PIPELINE (RAW PCM)
       // =========================
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
@@ -45,7 +46,7 @@
 
       source.connect(processor);
 
-      // 🔥 CRITICAL FIX: silent output so processor runs (no echo)
+      // 🔥 silent output (prevents echo but keeps processing alive)
       const silentGain = audioContext.createGain();
       silentGain.gain.value = 0;
 
@@ -54,6 +55,12 @@
 
       processor.onaudioprocess = (e) => {
         if (ws.readyState !== 1) return;
+
+        // 🔥 interrupt AI if user speaks
+        if (currentAudio) {
+          currentAudio.pause();
+          currentAudio = null;
+        }
 
         const input = e.inputBuffer.getChannelData(0);
 
@@ -74,9 +81,17 @@
       ws.onmessage = (msg) => {
         console.log("AI AUDIO RECEIVED");
 
+        // 🔥 stop previous audio
+        if (currentAudio) {
+          currentAudio.pause();
+          currentAudio = null;
+        }
+
         const audio = new Audio(
           "data:audio/mp3;base64," + msg.data
         );
+
+        currentAudio = audio;
         audio.play();
       };
     };
