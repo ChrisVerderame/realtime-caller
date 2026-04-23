@@ -56,6 +56,7 @@ wss.on("connection", (ws) => {
   let history = [];
   let lastSpoken = "";
   let isThinking = false;
+  let lastResponseTime = 0;
 
   const dg = new WebSocket(
     "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=48000",
@@ -68,22 +69,25 @@ wss.on("connection", (ws) => {
     const transcript = data.channel?.alternatives?.[0]?.transcript;
     if (!transcript) return;
 
-    // 🔥 ONLY FINAL TRANSCRIPTS (prevents spam + cutting)
+    // ✅ ONLY FINAL TRANSCRIPTS
     if (!data.is_final) return;
 
     // prevent duplicates
     if (transcript === lastSpoken) return;
     lastSpoken = transcript;
 
-    // prevent overlapping AI responses
+    const now = Date.now();
+
+    // 🔥 HARD DEBOUNCE (prevents double triggers)
+    if (now - lastResponseTime < 1500) return;
+    lastResponseTime = now;
+
+    // prevent overlap
     if (isThinking) return;
     isThinking = true;
 
     console.log("USER:", transcript);
 
-    // =========================
-    // MEMORY
-    // =========================
     history.push({ role: "user", content: transcript });
 
     try {
@@ -102,36 +106,37 @@ wss.on("connection", (ws) => {
           max_tokens: 15,
           temperature: 0.9,
           system: `
-You are Jack from Blackline calling a homeowner who filled out a form about selling their house.
+You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
 
-Start of call:
+This is the start of the call.
+
+Your job:
 - Confirm they filled out the form
 - Ask if they are the owner
 - Verify the property address
 
-If NOT owner:
-- Apologize briefly and end call politely
+If NOT the owner:
+- Apologize and end call politely
 
 If owner:
-- Have a natural, low-pressure conversation
+- Have a normal, low-pressure conversation
 
 Goal:
 - If it makes sense, set a quick in-person visit with Chris (the buyer)
 
 Tone:
-- Sound like a normal local person
-- Casual, not salesy
-- Short responses (1 sentence)
+- Normal local person
+- Not salesy
+- Casual, human
+- Short responses
 
 Rules:
-- NEVER repeat your intro
-- NEVER sound scripted
+- NEVER restart intro
 - DO NOT push
-- DO NOT ask about price or finances
+- DO NOT ask price or finances
 
 Appointments:
-- Frame as quick visit:
-  "Chris can swing by real quick"
+- “Chris can swing by real quick”
 - Keep it low pressure
 `,
           messages: history.slice(-6)
@@ -141,18 +146,16 @@ Appointments:
       const aiData = await aiRes.json();
       let reply = aiData.content?.[0]?.text || "yeah";
 
-      // small natural filler
       reply = "yeah—" + reply;
 
       console.log("AI:", reply);
 
-      // save memory
       history.push({ role: "assistant", content: reply });
 
       // =========================
-      // ELEVENLABS
+      // ELEVENLABS (FULL BUFFER FIX)
       // =========================
-      const tts = await fetch(
+      const ttsRes = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}`,
         {
           method: "POST",
@@ -173,15 +176,24 @@ Appointments:
         }
       );
 
-      const audio = Buffer.from(await tts.arrayBuffer());
+      // 🔥 FULL STREAM READ (prevents cut sentences)
+      const chunks = [];
+      const reader = ttsRes.body.getReader();
 
-      ws.send(audio.toString("base64"));
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+      }
+
+      const audioBuffer = Buffer.concat(chunks);
+
+      ws.send(audioBuffer.toString("base64"));
 
     } catch (err) {
       console.error("AI ERROR:", err);
     }
 
-    // 🔥 release lock AFTER everything finishes
     isThinking = false;
   });
 
