@@ -23,24 +23,38 @@ document.getElementById("startBtn").onclick = async () => {
 
   await room.localParticipant.setMicrophoneEnabled(true);
 
-  console.log("MIC LIVE");
+  // 🔥 CONNECT WS
+  ws = new WebSocket(`wss://${location.host}/`);
 
-  // 🔥 CONNECT AI WS
-  ws = new WebSocket(`wss://${location.host}`);
+  ws.onopen = () => console.log("WS CONNECTED");
 
-  // 🔥 GET YOUR MIC DIRECTLY
+  // 🔥 RAW AUDIO PIPELINE
   const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-  const recorder = new MediaRecorder(stream);
+  const audioContext = new AudioContext({ sampleRate: 48000 });
+  const source = audioContext.createMediaStreamSource(stream);
 
-  recorder.ondataavailable = async (e) => {
-    if (ws.readyState === 1) {
-      const buf = await e.data.arrayBuffer();
-      ws.send(buf);
+  const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+  source.connect(processor);
+  processor.connect(audioContext.destination);
+
+  processor.onaudioprocess = (e) => {
+    if (ws.readyState !== 1) return;
+
+    const input = e.inputBuffer.getChannelData(0);
+
+    // convert float32 → int16
+    const buffer = new ArrayBuffer(input.length * 2);
+    const view = new DataView(buffer);
+
+    for (let i = 0; i < input.length; i++) {
+      let s = Math.max(-1, Math.min(1, input[i]));
+      view.setInt16(i * 2, s * 0x7fff, true);
     }
-  };
 
-  recorder.start(250);
+    ws.send(buffer);
+  };
 
   // 🔥 PLAY AI RESPONSE
   ws.onmessage = (msg) => {
