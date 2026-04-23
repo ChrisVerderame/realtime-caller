@@ -6,14 +6,14 @@ const app = express();
 app.use(express.urlencoded({ extended: true }));
 
 // =========================
-// HEALTH CHECK
+// HEALTH
 // =========================
 app.get("/", (req, res) => {
   res.send("OK");
 });
 
 // =========================
-// TWILIO VOICE ENTRY (NEW)
+// TWILIO VOICE
 // =========================
 app.all("/voice", (req, res) => {
   res.type("text/xml").send(`
@@ -25,17 +25,13 @@ app.all("/voice", (req, res) => {
   `);
 });
 
-// =========================
-// SERVER SETUP
-// =========================
 const server = http.createServer(app);
 
 // =========================
-// RELAY WEBSOCKET (REAL-TIME)
+// RELAY WS
 // =========================
 const relayWss = new WebSocket.Server({ noServer: true });
 
-// Handle upgrade requests
 server.on("upgrade", (req, socket, head) => {
   if (req.url === "/relay") {
     relayWss.handleUpgrade(req, socket, head, (ws) => {
@@ -45,7 +41,7 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 // =========================
-// RELAY CONNECTION HANDLER
+// RELAY HANDLER
 // =========================
 relayWss.on("connection", (ws) => {
   console.log("RELAY CONNECTED");
@@ -54,20 +50,20 @@ relayWss.on("connection", (ws) => {
     try {
       const data = JSON.parse(msg);
 
-      // =========================
-      // USER SPEECH
-      // =========================
+      console.log("RAW:", data);
+
+      // 🔥 ConversationRelay sends speech like this
       if (data.type === "input_text") {
         const userText = data.text;
 
         console.log("USER:", userText);
 
-        // 🔥 TEST RESPONSE (INSTANT)
         const reply = "yeah gotcha — sounds good";
 
+        // 🔥 CORRECT FORMAT
         ws.send(JSON.stringify({
-          type: "response",
-          text: reply
+          type: "text",
+          token: reply
         }));
       }
 
@@ -86,7 +82,7 @@ relayWss.on("connection", (ws) => {
 });
 
 // =========================
-// START SERVER (RAILWAY SAFE)
+// START
 // =========================
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
   console.log("RUNNING");
