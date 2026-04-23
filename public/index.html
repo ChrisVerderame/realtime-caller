@@ -21,14 +21,14 @@
 
       console.log("TOKEN:", data);
 
-      // 🔥 CORRECT WAY
       const room = new LivekitClient.Room();
 
       await room.connect(data.url, data.token);
 
       console.log("CONNECTED");
 
-      await room.localParticipant.enableMicrophone();
+      // 🔥 FIXED MIC
+      await room.localParticipant.setMicrophoneEnabled(true);
 
       room.on("trackSubscribed", (track) => {
         if (track.kind === "audio") {
