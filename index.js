@@ -258,7 +258,7 @@ Important:
             model_id: "eleven_multilingual_v2",
             optimize_streaming_latency: 0,
             voice_settings: {
-              stability: 0.10,
+              stability: 0.08,
               similarity_boost: 0.8,
               style: 0.7,
               use_speaker_boost: true
