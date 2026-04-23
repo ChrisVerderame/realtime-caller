@@ -10,35 +10,41 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 // =========================
-// TOKEN
+// TOKEN ENDPOINT
 // =========================
 app.get("/token", async (req, res) => {
-  const room = "call-room";
+  try {
+    const room = "call-room";
 
-  const identity =
-    req.query.identity ||
-    "user-" + Math.random().toString(36).substring(7);
+    const identity =
+      req.query.identity ||
+      "user-" + Math.random().toString(36).substring(7);
 
-  const at = new AccessToken(
-    process.env.LIVEKIT_API_KEY,
-    process.env.LIVEKIT_API_SECRET,
-    { identity }
-  );
+    const at = new AccessToken(
+      process.env.LIVEKIT_API_KEY,
+      process.env.LIVEKIT_API_SECRET,
+      { identity }
+    );
 
-  at.addGrant({
-    roomJoin: true,
-    room,
-    canPublish: true,
-    canSubscribe: true
-  });
+    at.addGrant({
+      roomJoin: true,
+      room,
+      canPublish: true,
+      canSubscribe: true
+    });
 
-  const token = await at.toJwt();
+    const token = await at.toJwt();
 
-  res.json({
-    token,
-    url: process.env.LIVEKIT_URL,
-    room
-  });
+    res.json({
+      token,
+      url: process.env.LIVEKIT_URL,
+      room
+    });
+
+  } catch (err) {
+    console.error("TOKEN ERROR:", err.message);
+    res.status(500).send("Token error");
+  }
 });
 
 // =========================
@@ -62,7 +68,9 @@ wss.on("connection", (ws) => {
 
     console.log("USER:", text);
 
-    // 🔥 AI RESPONSE
+    // =========================
+    // AI RESPONSE (IMPROVED)
+    // =========================
     const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
@@ -72,17 +80,31 @@ wss.on("connection", (ws) => {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-5",
-        max_tokens: 20,
+        max_tokens: 25,
+        temperature: 0.9,
+        system: `
+You are Jack from Blackline.
+
+Speak like a real human on a phone call.
+Short, casual, slightly imperfect.
+Never sound robotic.
+Keep responses to 1 sentence.
+`,
         messages: [{ role: "user", content: text }]
       })
     });
 
     const aiData = await aiRes.json();
-    const reply = aiData.content?.[0]?.text || "yeah";
+    let reply = aiData.content?.[0]?.text || "yeah";
+
+    // 🔥 instant-feel trick
+    reply = "yeah—" + reply;
 
     console.log("AI:", reply);
 
-    // 🔥 ELEVENLABS
+    // =========================
+    // ELEVENLABS
+    // =========================
     const tts = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}`,
       {
@@ -93,7 +115,13 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           text: reply,
-          model_id: "eleven_multilingual_v2"
+          model_id: "eleven_multilingual_v2",
+          voice_settings: {
+            stability: 0.3,
+            similarity_boost: 0.7,
+            style: 0.2,
+            use_speaker_boost: true
+          }
         })
       }
     );
@@ -113,6 +141,8 @@ wss.on("connection", (ws) => {
   ws.on("close", () => dg.close());
 });
 
+// =========================
+// START SERVER
 // =========================
 server.listen(process.env.PORT || 3000, () => {
   console.log("REALTIME AI SERVER RUNNING");
