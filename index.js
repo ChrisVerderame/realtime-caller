@@ -86,6 +86,7 @@ wss.on("connection", (ws) => {
 
   let streamSid = null;
   let history = [];
+  let lastReplyTime = 0;
 
   const dg = new WebSocket(
     "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000",
@@ -97,14 +98,19 @@ wss.on("connection", (ws) => {
       const data = JSON.parse(msg);
       const transcript = data.channel?.alternatives?.[0]?.transcript;
 
-      if (!transcript || !data.is_final) return;
+      if (!transcript) return;
+
+      // prevent spamming replies too fast
+      const now = Date.now();
+      if (now - lastReplyTime < 1200) return;
+      lastReplyTime = now;
 
       console.log("USER:", transcript);
 
       history.push({ role: "user", content: transcript });
 
       // =========================
-      // CLAUDE (YOUR REAL PROMPT)
+      // CLAUDE (FAST VERSION)
       // =========================
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -115,31 +121,23 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 70,
-          temperature: 0.95,
+          max_tokens: 40,
+          temperature: 0.9,
           system: `
-You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
+You are Jack from Blackline calling a homeowner about selling.
 
-Speak like a real person on the phone:
-- casual, direct, slightly imperfect
-- short natural phrases
-- never robotic
+Speak naturally:
+- casual
+- short
+- human
+- not scripted
 
-OPENING:
-“hey—this is Jack from Blackline, just reaching out about a form you filled out… were you looking to sell the house?”
-
-FLOW:
+Always:
 - acknowledge → react → respond
 - one question at a time
-- don’t repeat yourself
 
-APPOINTMENT:
-“honestly easiest thing—Chris can just swing by and take a look, super quick”
-
-TONE:
-- relaxed
-- conversational
-- confident
+Example tone:
+"yeah gotcha—that makes sense… are you thinking soon or just exploring?"
 `,
           messages: history.slice(-6)
         })
@@ -153,7 +151,7 @@ TONE:
       history.push({ role: "assistant", content: reply });
 
       // =========================
-      // ELEVENLABS
+      // ELEVENLABS (LOW LATENCY)
       // =========================
       const tts = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}`,
@@ -165,7 +163,8 @@ TONE:
           },
           body: JSON.stringify({
             text: reply,
-            model_id: "eleven_multilingual_v2"
+            model_id: "eleven_multilingual_v2",
+            optimize_streaming_latency: 3
           })
         }
       );
