@@ -9,14 +9,14 @@ const VOICE_ID = process.env.VOICE_ID;
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 
 let lastAudio = null;
- 
+
 // =========================
 // HEALTH
 // =========================
 app.get("/", (req, res) => res.send("OK"));
 
 // =========================
-// AI (FASTER)
+// FAST AI RESPONSE
 // =========================
 async function getAIResponse(text) {
   try {
@@ -29,13 +29,14 @@ async function getAIResponse(text) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-5",
-        max_tokens: 25, // 🔥 faster
-        temperature: 0.8,
+        max_tokens: 15, // 🔥 fast
+        temperature: 0.7,
         system: `
 You are Jack from Blackline.
 
-Casual, quick, human.
-1 sentence max.
+Talk like a real human on the phone.
+VERY short responses (5–8 words).
+Casual, slightly messy, natural.
 `,
         messages: [{ role: "user", content: text || "hello" }]
       })
@@ -48,10 +49,10 @@ Casual, quick, human.
       if (b.type === "text") output += b.text;
     }
 
-    return output.trim() || "yeah gotcha";
+    return output.trim() || "gotcha";
 
   } catch {
-    return "yeah gotcha";
+    return "gotcha";
   }
 }
 
@@ -63,9 +64,16 @@ app.all("/voice", async (req, res) => {
 
   console.log("USER:", speech);
 
-  const reply = await getAIResponse(speech);
+  const aiReply = await getAIResponse(speech);
+
+  // 🔥 makes it feel instant
+  const reply = `yeah—${aiReply}`;
+
   console.log("AI:", reply);
 
+  // =========================
+  // ELEVENLABS
+  // =========================
   const tts = await fetch(
     `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
     {
@@ -78,8 +86,10 @@ app.all("/voice", async (req, res) => {
         text: reply,
         model_id: "eleven_multilingual_v2",
         voice_settings: {
-          stability: 0.4,
-          similarity_boost: 0.8
+          stability: 0.3,
+          similarity_boost: 0.7,
+          style: 0.2,
+          use_speaker_boost: true
         }
       })
     }
@@ -88,6 +98,7 @@ app.all("/voice", async (req, res) => {
   const buffer = Buffer.from(await tts.arrayBuffer());
   lastAudio = buffer;
 
+  // cache buster (prevents static / caching issues)
   const audioUrl = `https://${req.headers.host}/audio?ts=${Date.now()}`;
 
   res.type("text/xml").send(`
@@ -98,18 +109,18 @@ app.all("/voice", async (req, res) => {
     input="speech"
     action="/voice"
     method="POST"
-    timeout="2"
-    speechTimeout="auto"
+    timeout="1"
+    speechTimeout="0.6"
+    bargeIn="true"
   />
 
-  <!-- 🔥 THIS KEEPS CALL ALIVE -->
   <Redirect>/voice</Redirect>
 </Response>
   `);
 });
 
 // =========================
-// AUDIO
+// AUDIO DELIVERY (FIXED)
 // =========================
 app.get("/audio", (req, res) => {
   if (!lastAudio) return res.status(404).send("No audio");
@@ -127,5 +138,5 @@ app.get("/audio", (req, res) => {
 // START
 // =========================
 http.createServer(app).listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("RUNNING STABLE LOOP");
+  console.log("RUNNING FAST PRODUCTION VERSION");
 });
