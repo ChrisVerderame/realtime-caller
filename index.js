@@ -53,12 +53,16 @@ app.get("/token", async (req, res) => {
 wss.on("connection", (ws) => {
   console.log("AI WS CONNECTED");
 
+  // 🧠 conversation memory
+  let history = [];
+
+  // prevent spam duplicates
+  let lastSpoken = "";
+
   const dg = new WebSocket(
     "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=48000",
     { headers: { Authorization: `Token ${process.env.DEEPGRAM_KEY}` } }
   );
-
-  let lastSpoken = "";
 
   dg.on("message", async (msg) => {
     const data = JSON.parse(msg);
@@ -66,17 +70,22 @@ wss.on("connection", (ws) => {
     const transcript = data.channel?.alternatives?.[0]?.transcript;
     if (!transcript) return;
 
-    // 🔥 allow partials (faster)
+    // ⚡ allow partials (faster feel)
     if (!data.is_final && transcript.length < 5) return;
 
-    // prevent spam repeats
+    // prevent duplicate spam
     if (transcript === lastSpoken) return;
     lastSpoken = transcript;
 
     console.log("USER:", transcript);
 
     // =========================
-    // AI RESPONSE
+    // ADD TO MEMORY
+    // =========================
+    history.push({ role: "user", content: transcript });
+
+    // =========================
+    // AI RESPONSE (IMPROVED)
     // =========================
     const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -90,27 +99,59 @@ wss.on("connection", (ws) => {
         max_tokens: 15,
         temperature: 0.9,
         system: `
-You are Jack from Blackline.
+You are Jack from Blackline following up on a form the homeowner filled out expressing interest in selling their house.
 
-Speak like a real human on a phone call.
-Short, casual, slightly imperfect.
-Never robotic.
-1 sentence max.
+You are already mid-conversation.
+
+Your ONLY goal is to set an appointment.
+
+Rules:
+- NEVER reintroduce yourself
+- NEVER restart the conversation
+- Keep responses short and natural (under 10 words when possible)
+- Sound casual, human, slightly imperfect
+- Move the conversation toward booking a time to talk
+
+What you should do:
+- Confirm their interest level (are they serious or just exploring)
+- Ask light qualifying questions (timeline, motivation, situation)
+- Guide toward setting a specific appointment time
+
+What you should NOT do:
+- Do NOT ask about price
+- Do NOT ask about finances
+- Do NOT interrogate or overwhelm them
+- Do NOT explain the whole process
+
+Behavior:
+- If they hesitate, soften and keep it low pressure
+- If they show interest, move quickly to lock a time
+- If they interrupt, adapt immediately and respond to what they said
+- Do not repeat yourself
+
+End goal:
+- Secure a clear appointment time and day
+- Keep it smooth, quick, and conversational
 `,
-        messages: [{ role: "user", content: transcript }]
+        messages: history.slice(-6)
       })
     });
 
     const aiData = await aiRes.json();
     let reply = aiData.content?.[0]?.text || "yeah";
 
-    // 🔥 instant feel
+    // ⚡ instant feel trick
     reply = "yeah—" + reply;
 
     console.log("AI:", reply);
 
     // =========================
-    // ELEVENLABS
+    // SAVE AI RESPONSE TO MEMORY
+    // =========================
+    history.push({ role: "assistant", content: reply });
+
+    // =========================
+    // ELEVENLABS TTS
     // =========================
     const tts = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}`,
@@ -135,6 +176,7 @@ Never robotic.
 
     const audio = Buffer.from(await tts.arrayBuffer());
 
+    // send back to browser
     ws.send(audio.toString("base64"));
   });
 
