@@ -1,6 +1,11 @@
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
+const ffmpeg = require("fluent-ffmpeg");
+const ffmpegPath = require("ffmpeg-static");
+const { Readable } = require("stream");
+
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -10,14 +15,8 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const ELEVEN_KEY = process.env.ELEVEN_KEY;
 const VOICE_ID = process.env.VOICE_ID;
 
-// =========================
-// HEALTH
-// =========================
 app.get("/", (req, res) => res.send("OK"));
 
-// =========================
-// TWILIO ENTRY
-// =========================
 app.all("/voice", (req, res) => {
   res.type("text/xml").send(`
 <Response>
@@ -35,45 +34,54 @@ const wss = new WebSocket.Server({ server });
 // AI
 // =========================
 async function getAIResponse(history) {
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": ANTHROPIC_KEY,
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-5",
-        max_tokens: 50,
-        temperature: 0.9,
-        system: `
-You are Jack from Blackline.
-
-Casual, human, short.
-
-- 1 sentence most of the time
-- slightly messy wording
-- use fillers like "yeah", "honestly", "gotcha"
-- never sound scripted
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": ANTHROPIC_KEY,
+      "content-type": "application/json",
+      "anthropic-version": "2023-06-01"
+    },
+    body: JSON.stringify({
+      model: "claude-sonnet-4-5",
+      max_tokens: 50,
+      temperature: 0.9,
+      system: `
+Casual, human, short. Not robotic.
 `,
-        messages: history
-      })
-    });
+      messages: history
+    })
+  });
 
-    const data = await res.json();
+  const data = await res.json();
 
-    let text = "";
-    for (const b of data.content || []) {
-      if (b.type === "text") text += b.text;
-    }
-
-    return text.trim() || "yeah gotcha";
-
-  } catch (err) {
-    console.log("AI ERROR:", err.message);
-    return "yeah gotcha — makes sense";
+  let text = "";
+  for (const b of data.content || []) {
+    if (b.type === "text") text += b.text;
   }
+
+  return text.trim() || "yeah gotcha";
+}
+
+// =========================
+// AUDIO CONVERSION
+// =========================
+function convertToMulaw(buffer) {
+  return new Promise((resolve, reject) => {
+    const stream = new Readable();
+    stream.push(Buffer.from(buffer));
+    stream.push(null);
+
+    const chunks = [];
+
+    ffmpeg(stream)
+      .audioFrequency(8000)
+      .audioChannels(1)
+      .format("mulaw")
+      .on("error", reject)
+      .on("end", () => resolve(Buffer.concat(chunks)))
+      .pipe()
+      .on("data", (chunk) => chunks.push(chunk));
+  });
 }
 
 // =========================
@@ -85,9 +93,6 @@ wss.on("connection", (ws) => {
   let history = [];
   let streamReady = false;
 
-  // =========================
-  // DEEPGRAM
-  // =========================
   const dg = new WebSocket(
     "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000",
     {
@@ -97,20 +102,13 @@ wss.on("connection", (ws) => {
 
   dg.on("open", () => console.log("DG CONNECTED"));
 
-  dg.on("error", (err) => {
-    console.log("DG ERROR:", err.message);
-  });
-
   dg.on("message", async (msg) => {
     try {
       const data = JSON.parse(msg);
-
-      // 🔥 ONLY FINAL TRANSCRIPTS
       if (!data.is_final) return;
 
       const transcript = data.channel?.alternatives?.[0]?.transcript;
-
-      if (!transcript || transcript.length < 2) return;
+      if (!transcript) return;
 
       console.log("USER:", transcript);
 
@@ -123,9 +121,7 @@ wss.on("connection", (ws) => {
 
       if (!streamReady) return;
 
-      // =========================
-      // ELEVENLABS (BUFFERED FIX)
-      // =========================
+      // ELEVENLABS RAW AUDIO
       const tts = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
         {
@@ -136,25 +132,27 @@ wss.on("connection", (ws) => {
           },
           body: JSON.stringify({
             text: reply,
-            model_id: "eleven_turbo_v2",
-            output_format: "ulaw_8000"
+            model_id: "eleven_turbo_v2"
           })
         }
       );
 
-      const audioBuffer = await tts.arrayBuffer();
+      const rawAudio = await tts.arrayBuffer();
+
+      // 🔥 FORCE CONVERT
+      const mulawAudio = await convertToMulaw(rawAudio);
 
       const chunkSize = 320;
 
-      for (let i = 0; i < audioBuffer.byteLength; i += chunkSize) {
+      for (let i = 0; i < mulawAudio.length; i += chunkSize) {
         if (ws.readyState !== 1) break;
 
-        const chunk = audioBuffer.slice(i, i + chunkSize);
+        const chunk = mulawAudio.slice(i, i + chunkSize);
 
         ws.send(JSON.stringify({
           event: "media",
           media: {
-            payload: Buffer.from(chunk).toString("base64")
+            payload: chunk.toString("base64")
           }
         }));
 
@@ -162,30 +160,20 @@ wss.on("connection", (ws) => {
       }
 
     } catch (err) {
-      console.log("DG MSG ERROR:", err.message);
+      console.log("ERROR:", err.message);
     }
   });
 
-  // =========================
-  // TWILIO AUDIO → DEEPGRAM
-  // =========================
   ws.on("message", (msg) => {
-    try {
-      const data = JSON.parse(msg);
+    const data = JSON.parse(msg);
 
-      if (data.event === "start") {
-        streamReady = true;
-        console.log("STREAM READY");
-      }
+    if (data.event === "start") {
+      streamReady = true;
+      console.log("STREAM READY");
+    }
 
-      if (data.event === "media") {
-        if (dg.readyState === 1) {
-          dg.send(Buffer.from(data.media.payload, "base64"));
-        }
-      }
-
-    } catch (err) {
-      console.log("WS ERROR:", err.message);
+    if (data.event === "media" && dg.readyState === 1) {
+      dg.send(Buffer.from(data.media.payload, "base64"));
     }
   });
 
@@ -195,9 +183,6 @@ wss.on("connection", (ws) => {
   });
 });
 
-// =========================
-// START
-// =========================
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
   console.log("RUNNING");
 });
