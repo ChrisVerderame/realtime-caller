@@ -5,33 +5,40 @@
 </head>
 <body>
   <h1>Real-Time AI Caller</h1>
-  <button onclick="start()">Start Call</button>
+  <button id="startBtn">Start Call</button>
 
-  <script type="module">
-    import { connect } from "https://cdn.skypack.dev/livekit-client";
+  <script src="https://unpkg.com/livekit-client/dist/livekit-client.umd.js"></script>
 
-    let room;
+  <script>
+    const btn = document.getElementById("startBtn");
 
-    async function start() {
-      const res = await fetch("/token");
-      const data = await res.json();
+    btn.onclick = async () => {
+      try {
+        console.log("Starting...");
 
-      room = await connect(data.url, data.token);
+        const res = await fetch("/token");
+        const data = await res.json();
 
-      console.log("CONNECTED");
+        console.log("TOKEN:", data);
 
-      // mic input
-      await room.localParticipant.enableCameraAndMicrophone();
+        const room = await LivekitClient.connect(data.url, data.token);
 
-      room.on("trackSubscribed", (track) => {
-        if (track.kind === "audio") {
-          const audio = track.attach();
-          document.body.appendChild(audio);
-        }
-      });
-    }
+        console.log("CONNECTED");
 
-    window.start = start;
+        await room.localParticipant.enableMicrophone();
+
+        room.on("trackSubscribed", (track) => {
+          if (track.kind === "audio") {
+            const audio = track.attach();
+            document.body.appendChild(audio);
+          }
+        });
+
+      } catch (err) {
+        console.error("ERROR:", err);
+        alert("Check console (F12)");
+      }
+    };
   </script>
 </body>
 </html>
