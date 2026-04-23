@@ -3,11 +3,16 @@ const http = require("http");
 const WebSocket = require("ws");
 const { AccessToken } = require("livekit-server-sdk");
 
-// added for dialing
+// dialing
 const { getLeads } = require("./google");
 const { callLead } = require("./dialer");
 
 const app = express();
+
+// ✅ REQUIRED FOR TWILIO (fixes application error)
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+
 app.use(express.static("public"));
 
 const server = http.createServer(app);
@@ -52,7 +57,7 @@ app.get("/token", async (req, res) => {
 });
 
 // =========================
-// TWILIO → LIVEKIT (REALTIME FIX)
+// TWILIO → LIVEKIT (REALTIME)
 // =========================
 app.post("/twilio-voice", (req, res) => {
   const VoiceResponse = require("twilio").twiml.VoiceResponse;
