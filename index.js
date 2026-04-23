@@ -10,53 +10,49 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 // =========================
-// TOKEN ENDPOINT
+// TOKEN
 // =========================
 app.get("/token", async (req, res) => {
-  try {
-    const room = "call-room";
+  const room = "call-room";
 
-    const identity =
-      req.query.identity ||
-      "user-" + Math.random().toString(36).substring(7);
+  const identity =
+    req.query.identity ||
+    "user-" + Math.random().toString(36).substring(7);
 
-    const at = new AccessToken(
-      process.env.LIVEKIT_API_KEY,
-      process.env.LIVEKIT_API_SECRET,
-      { identity }
-    );
+  const at = new AccessToken(
+    process.env.LIVEKIT_API_KEY,
+    process.env.LIVEKIT_API_SECRET,
+    { identity }
+  );
 
-    at.addGrant({
-      roomJoin: true,
-      room,
-      canPublish: true,
-      canSubscribe: true
-    });
+  at.addGrant({
+    roomJoin: true,
+    room,
+    canPublish: true,
+    canSubscribe: true
+  });
 
-    const token = await at.toJwt();
-
-    res.json({
-      token,
-      url: process.env.LIVEKIT_URL,
-      room
-    });
-
-  } catch (err) {
-    console.error("TOKEN ERROR:", err.message);
-    res.status(500).send("Token error");
-  }
+  res.json({
+    token: await at.toJwt(),
+    url: process.env.LIVEKIT_URL,
+    room
+  });
 });
 
 // =========================
-// REALTIME AI WS
+// WS
 // =========================
 wss.on("connection", (ws) => {
   console.log("AI WS CONNECTED");
 
   let history = [];
-  let lastSpoken = "";
   let isThinking = false;
   let lastResponseTime = 0;
+
+  // 🧠 CALL STATE
+  let stage = "intro"; // intro → owner → address → conversation
+  let introDone = false;
+  let lastTranscript = "";
 
   const dg = new WebSocket(
     "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=48000",
@@ -66,20 +62,18 @@ wss.on("connection", (ws) => {
   dg.on("message", async (msg) => {
     try {
       const data = JSON.parse(msg);
-
-      const transcript = data.channel?.alternatives?.[0]?.transcript;
+      let transcript = data.channel?.alternatives?.[0]?.transcript;
       if (!transcript) return;
 
-      // ONLY final transcripts
       if (!data.is_final) return;
 
-      // prevent duplicates
-      if (transcript === lastSpoken) return;
-      lastSpoken = transcript;
+      // 🔥 normalize transcript (prevents duplicates)
+      transcript = transcript.toLowerCase().trim();
+
+      if (transcript === lastTranscript) return;
+      lastTranscript = transcript;
 
       const now = Date.now();
-
-      // debounce
       if (now - lastResponseTime < 1200) return;
       lastResponseTime = now;
 
@@ -91,7 +85,19 @@ wss.on("connection", (ws) => {
       history.push({ role: "user", content: transcript });
 
       // =========================
-      // AI RESPONSE
+      // STAGE CONTROL
+      // =========================
+      if (!introDone) {
+        introDone = true;
+      }
+
+      // move stages based on convo
+      if (stage === "intro") stage = "owner";
+      else if (stage === "owner") stage = "address";
+      else if (stage === "address") stage = "conversation";
+
+      // =========================
+      // AI
       // =========================
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -102,58 +108,41 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 60, // 🔥 FIXED (no more cut sentences)
+          max_tokens: 60,
           temperature: 0.9,
           system: `
-You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
+You are Jack from Blackline calling about a home selling inquiry.
 
-This is the start of the call.
+You MUST follow this flow and NEVER repeat steps:
 
-Speak like a real person:
-- casual
-- slightly imperfect
-- not overly structured
-- not robotic
+1. Intro (ONLY ONCE)
+2. Confirm owner
+3. Confirm address
+4. Then normal conversation
 
-Do NOT sound scripted.
+Rules:
+- NEVER repeat the intro after it has been said
+- NEVER ask the same question twice
+- If user already answered something, move forward
+- Speak casually and naturally
+- Do not sound scripted
 
-Opening:
-- confirm they filled something out about selling
-- ask if they are the owner
-- verify the address naturally
-
-If wrong person:
-- apologize briefly and end call
-
-If correct:
-- have a normal conversation
-
-Goal:
-- if it makes sense, set a quick in-person visit with Chris (the buyer)
-
-Tone:
-- relaxed
-- conversational
-- not pushy
-
-Important:
-- use natural phrasing
-- short but complete thoughts
-- it's okay to say things like "yeah", "gotcha", "okay"
+Current stage: ${stage}
+Intro already done: ${introDone}
 `,
           messages: history.slice(-6)
         })
       });
 
       const aiData = await aiRes.json();
-      let reply = aiData.content?.[0]?.text || "yeah";
+      let reply = aiData.content?.[0]?.text || "okay";
 
       console.log("AI:", reply);
 
       history.push({ role: "assistant", content: reply });
 
       // =========================
-      // ELEVENLABS (FULL AUDIO FIX)
+      // TTS
       // =========================
       const ttsRes = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}?output_format=mp3_44100_128`,
@@ -177,30 +166,24 @@ Important:
         }
       );
 
-      const arrayBuffer = await ttsRes.arrayBuffer();
-      const audioBuffer = Buffer.from(arrayBuffer);
+      const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
 
       ws.send(audioBuffer.toString("base64"));
 
     } catch (err) {
-      console.error("PROCESS ERROR:", err);
+      console.error(err);
     } finally {
       isThinking = false;
     }
   });
 
   ws.on("message", (msg) => {
-    if (dg.readyState === 1) {
-      dg.send(msg);
-    }
+    if (dg.readyState === 1) dg.send(msg);
   });
 
   ws.on("close", () => dg.close());
 });
 
-// =========================
-// START SERVER
-// =========================
 server.listen(process.env.PORT || 3000, () => {
-  console.log("REALTIME AI SERVER RUNNING");
+  console.log("SERVER RUNNING");
 });
