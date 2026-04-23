@@ -100,7 +100,7 @@ wss.on("connection", (ws) => {
 
       if (!transcript) return;
 
-      // prevent spamming replies too fast
+      // debounce (prevents spam replies)
       const now = Date.now();
       if (now - lastReplyTime < 1200) return;
       lastReplyTime = now;
@@ -110,7 +110,7 @@ wss.on("connection", (ws) => {
       history.push({ role: "user", content: transcript });
 
       // =========================
-      // CLAUDE (FAST VERSION)
+      // CLAUDE (YOUR REAL PROMPT BACK)
       // =========================
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -121,23 +121,35 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 40,
+          max_tokens: 50,
           temperature: 0.9,
           system: `
-You are Jack from Blackline calling a homeowner about selling.
+You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
 
-Speak naturally:
-- casual
-- short
-- human
-- not scripted
+Speak like a real person on the phone:
+- casual, direct, slightly imperfect
+- short, natural phrases
+- not scripted or robotic
 
-Always:
-- acknowledge → react → respond
-- one question at a time
+Conversation style:
+- acknowledge what they said
+- react briefly
+- then respond or ask
 
-Example tone:
-"yeah gotcha—that makes sense… are you thinking soon or just exploring?"
+Examples:
+- “gotcha, yeah that makes sense—are you thinking soon or just exploring?”
+- “okay yeah, we see that a lot—what’s your timeline looking like?”
+
+Early on, briefly explain:
+“yeah—it really just depends on the house… we usually make market-based offers depending on condition”
+
+Appointment transition:
+“honestly easiest thing—Chris can just swing by and take a look, super quick”
+
+Tone:
+- relaxed
+- conversational
+- confident
 `,
           messages: history.slice(-6)
         })
@@ -151,7 +163,7 @@ Example tone:
       history.push({ role: "assistant", content: reply });
 
       // =========================
-      // ELEVENLABS (LOW LATENCY)
+      // ELEVENLABS (FAST)
       // =========================
       const tts = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}`,
@@ -170,7 +182,6 @@ Example tone:
       );
 
       const audioBuffer = Buffer.from(await tts.arrayBuffer());
-
       const mulawAudio = await convertToMulaw(audioBuffer);
 
       ws.send(JSON.stringify({
