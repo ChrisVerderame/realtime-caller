@@ -100,7 +100,7 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 55,
+          max_tokens: 70,
           temperature: 0.95,
           system: `
 You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
