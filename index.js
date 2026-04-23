@@ -280,6 +280,21 @@ Sound like a real guy calling > being perfect
 });
 
 // =========================
+// TEST GOOGLE SHEETS LEADS
+// =========================
+const { getLeads } = require("./google");
+
+app.get("/test-leads", async (req, res) => {
+  try {
+    const leads = await getLeads();
+    res.json(leads);
+  } catch (err) {
+    console.error("LEADS ERROR:", err);
+    res.status(500).send("error fetching leads");
+  }
+});
+
+// =========================
 // START SERVER
 // =========================
 server.listen(process.env.PORT || 3000, () => {
