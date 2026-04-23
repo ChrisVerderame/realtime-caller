@@ -11,20 +11,20 @@ const server = http.createServer(app);
 app.get("/", (req, res) => res.send("OK"));
 
 // =========================
-// SIP ENTRY (NO AUDIO HERE)
+// SIP ENTRY → TWIML
 // =========================
 app.all("/voice", (req, res) => {
   res.type("text/xml").send(`
 <Response>
-  <Dial>
-    <Sip>sip:realtime@${req.headers.host}</Sip>
-  </Dial>
+  <Connect>
+    <Stream url="wss://${req.headers.host}/realtime" />
+  </Connect>
 </Response>
   `);
 });
 
 // =========================
-// REALTIME WS SERVER
+// WS SERVER (REALTIME)
 // =========================
 const wss = new WebSocket.Server({ noServer: true });
 
@@ -39,38 +39,52 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 // =========================
-// AUDIO SESSION
+// REALTIME AUDIO HANDLER
 // =========================
 wss.on("connection", (ws) => {
   console.log("REALTIME CONNECTED");
+
+  let streamSid = null;
 
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
 
-      // Twilio sends audio here
+      // 🔥 capture streamSid
+      if (data.event === "start") {
+        streamSid = data.streamSid;
+        console.log("STREAM STARTED:", streamSid);
+      }
+
+      // 🔥 echo audio back (FIXED)
       if (data.event === "media") {
-        // 🔥 FOR NOW: ECHO BACK AUDIO
-        ws.send(JSON.stringify({
-          event: "media",
-          media: {
-            payload: data.media.payload
-          }
-        }));
+        if (ws.readyState === 1 && streamSid) {
+          ws.send(JSON.stringify({
+            event: "media",
+            streamSid: streamSid,
+            media: {
+              payload: data.media.payload
+            }
+          }));
+        }
       }
 
     } catch (err) {
-      console.log("ERR:", err.message);
+      console.log("ERROR:", err.message);
     }
   });
 
   ws.on("close", () => {
     console.log("REALTIME CLOSED");
   });
+
+  ws.on("error", (err) => {
+    console.log("WS ERROR:", err.message);
+  });
 });
 
 // =========================
-// START
+// START SERVER
 // =========================
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
   console.log("RUNNING REALTIME");
