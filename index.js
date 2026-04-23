@@ -4,30 +4,68 @@ const http = require("http");
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 
-// =========================
-// HEALTH CHECK
-// =========================
-app.get("/", (req, res) => {
-  res.send("OK");
-});
+const ELEVEN_KEY = process.env.ELEVEN_KEY;
+const VOICE_ID = process.env.VOICE_ID;
 
 // =========================
-// SIP VOICE HANDLER
+// HEALTH
 // =========================
-app.all("/voice", (req, res) => {
+app.get("/", (req, res) => res.send("OK"));
+
+// =========================
+// AUDIO STORAGE (TEMP)
+// =========================
+let lastAudio = null;
+
+// =========================
+// VOICE ROUTE
+// =========================
+app.all("/voice", async (req, res) => {
   console.log("/voice hit");
+
+  // generate ElevenLabs audio
+  const tts = await fetch(
+    `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
+    {
+      method: "POST",
+      headers: {
+        "xi-api-key": ELEVEN_KEY,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        text: "hey — this is jack from blackline, just calling about your property",
+        model_id: "eleven_turbo_v2"
+      })
+    }
+  );
+
+  const audioBuffer = Buffer.from(await tts.arrayBuffer());
+  lastAudio = audioBuffer;
 
   res.type("text/xml").send(`
 <Response>
-  <Say voice="Polly.Joanna">
-    Hey — this is Jack from Blackline. Can you hear me alright?
-  </Say>
+  <Play>https://${req.headers.host}/audio</Play>
 </Response>
   `);
 });
 
 // =========================
-// START SERVER
+// AUDIO ENDPOINT
+// =========================
+app.get("/audio", (req, res) => {
+  if (!lastAudio) {
+    return res.status(404).send("No audio");
+  }
+
+  res.set({
+    "Content-Type": "audio/mpeg"
+  });
+
+  res.send(lastAudio);
+});
+
+// =========================
+// START
 // =========================
 const server = http.createServer(app);
 
