@@ -3,6 +3,10 @@ const http = require("http");
 const WebSocket = require("ws");
 const { AccessToken } = require("livekit-server-sdk");
 
+// added for dialing
+const { getLeads } = require("./google");
+const { callLead } = require("./dialer");
+
 const app = express();
 app.use(express.static("public"));
 
@@ -48,13 +52,13 @@ app.get("/token", async (req, res) => {
 });
 
 // =========================
-// 🔥 TWILIO → LIVEKIT (ONLY CHANGE)
+// TWILIO → LIVEKIT (REALTIME FIX)
 // =========================
 app.post("/twilio-voice", (req, res) => {
   const VoiceResponse = require("twilio").twiml.VoiceResponse;
   const twiml = new VoiceResponse();
 
-  // 👉 Send call directly into LiveKit SIP
+  // send call into LiveKit SIP
   twiml.dial().sip(`sip:${process.env.LIVEKIT_SIP_ENDPOINT}`);
 
   res.type("text/xml");
@@ -102,9 +106,6 @@ wss.on("connection", (ws) => {
 
       history.push({ role: "user", content: transcript });
 
-      // =========================
-      // AI RESPONSE (UNCHANGED)
-      // =========================
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -247,9 +248,6 @@ Sound like a real guy calling > being perfect
 
       history.push({ role: "assistant", content: reply });
 
-      // =========================
-      // ELEVENLABS (UNCHANGED)
-      // =========================
       const ttsRes = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}?output_format=mp3_44100_128`,
         {
@@ -291,6 +289,27 @@ Sound like a real guy calling > being perfect
   });
 
   ws.on("close", () => dg.close());
+});
+
+// =========================
+// START DIALING
+// =========================
+app.get("/start-dialing", async (req, res) => {
+  try {
+    const leads = await getLeads();
+
+    for (const lead of leads) {
+      console.log("CALLING:", lead.phone);
+      await callLead(lead);
+      await new Promise((r) => setTimeout(r, 20000));
+    }
+
+    res.send("Dialing started");
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("dialing error");
+  }
 });
 
 // =========================
