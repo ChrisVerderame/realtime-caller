@@ -1,11 +1,6 @@
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
-const ffmpeg = require("fluent-ffmpeg");
-const ffmpegPath = require("ffmpeg-static");
-const { Readable } = require("stream");
-
-ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
 app.use(express.urlencoded({ extended: true }));
@@ -34,54 +29,41 @@ const wss = new WebSocket.Server({ server });
 // AI
 // =========================
 async function getAIResponse(history) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": ANTHROPIC_KEY,
-      "content-type": "application/json",
-      "anthropic-version": "2023-06-01"
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-5",
-      max_tokens: 50,
-      temperature: 0.9,
-      system: `
-Casual, human, short. Not robotic.
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_KEY,
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 50,
+        temperature: 0.9,
+        system: `
+Casual, human, short.
+1 sentence max.
+Use "yeah", "honestly", "gotcha".
+Don't sound scripted.
 `,
-      messages: history
-    })
-  });
+        messages: history
+      })
+    });
 
-  const data = await res.json();
+    const data = await res.json();
 
-  let text = "";
-  for (const b of data.content || []) {
-    if (b.type === "text") text += b.text;
+    let text = "";
+    for (const b of data.content || []) {
+      if (b.type === "text") text += b.text;
+    }
+
+    return text.trim() || "yeah gotcha";
+
+  } catch (err) {
+    console.log("AI ERROR:", err.message);
+    return "yeah gotcha";
   }
-
-  return text.trim() || "yeah gotcha";
-}
-
-// =========================
-// AUDIO CONVERSION
-// =========================
-function convertToMulaw(buffer) {
-  return new Promise((resolve, reject) => {
-    const stream = new Readable();
-    stream.push(Buffer.from(buffer));
-    stream.push(null);
-
-    const chunks = [];
-
-    ffmpeg(stream)
-      .audioFrequency(8000)
-      .audioChannels(1)
-      .format("mulaw")
-      .on("error", reject)
-      .on("end", () => resolve(Buffer.concat(chunks)))
-      .pipe()
-      .on("data", (chunk) => chunks.push(chunk));
-  });
 }
 
 // =========================
@@ -93,6 +75,9 @@ wss.on("connection", (ws) => {
   let history = [];
   let streamReady = false;
 
+  // =========================
+  // DEEPGRAM
+  // =========================
   const dg = new WebSocket(
     "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000",
     {
@@ -105,6 +90,7 @@ wss.on("connection", (ws) => {
   dg.on("message", async (msg) => {
     try {
       const data = JSON.parse(msg);
+
       if (!data.is_final) return;
 
       const transcript = data.channel?.alternatives?.[0]?.transcript;
@@ -121,7 +107,9 @@ wss.on("connection", (ws) => {
 
       if (!streamReady) return;
 
-      // ELEVENLABS RAW AUDIO
+      // =========================
+      // ELEVENLABS (BUFFERED)
+      // =========================
       const tts = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
         {
@@ -132,22 +120,23 @@ wss.on("connection", (ws) => {
           },
           body: JSON.stringify({
             text: reply,
-            model_id: "eleven_turbo_v2"
+            model_id: "eleven_turbo_v2",
+            output_format: "ulaw_8000"
           })
         }
       );
 
-      const rawAudio = await tts.arrayBuffer();
+      const buffer = Buffer.from(await tts.arrayBuffer());
 
-      // 🔥 FORCE CONVERT
-      const mulawAudio = await convertToMulaw(rawAudio);
+      // 🔥 WAIT A MOMENT (CRITICAL STABILITY FIX)
+      await new Promise(r => setTimeout(r, 100));
 
       const chunkSize = 320;
 
-      for (let i = 0; i < mulawAudio.length; i += chunkSize) {
+      for (let i = 0; i < buffer.length; i += chunkSize) {
         if (ws.readyState !== 1) break;
 
-        const chunk = mulawAudio.slice(i, i + chunkSize);
+        const chunk = buffer.slice(i, i + chunkSize);
 
         ws.send(JSON.stringify({
           event: "media",
@@ -165,15 +154,22 @@ wss.on("connection", (ws) => {
   });
 
   ws.on("message", (msg) => {
-    const data = JSON.parse(msg);
+    try {
+      const data = JSON.parse(msg);
 
-    if (data.event === "start") {
-      streamReady = true;
-      console.log("STREAM READY");
-    }
+      if (data.event === "start") {
+        streamReady = true;
+        console.log("STREAM READY");
+      }
 
-    if (data.event === "media" && dg.readyState === 1) {
-      dg.send(Buffer.from(data.media.payload, "base64"));
+      if (data.event === "media") {
+        if (dg.readyState === 1) {
+          dg.send(Buffer.from(data.media.payload, "base64"));
+        }
+      }
+
+    } catch (err) {
+      console.log("WS ERROR:", err.message);
     }
   });
 
