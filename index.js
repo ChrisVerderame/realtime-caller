@@ -1,6 +1,7 @@
 const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
+const { spawn } = require("child_process");
 const { AccessToken } = require("livekit-server-sdk");
 
 const app = express();
@@ -13,29 +14,24 @@ app.use(express.static("public"));
 // TOKEN ENDPOINT
 // =========================
 app.get("/token", async (req, res) => {
-  try {
-    const at = new AccessToken(
-      process.env.LIVEKIT_API_KEY,
-      process.env.LIVEKIT_API_SECRET,
-      { identity: "caller" }
-    );
+  const at = new AccessToken(
+    process.env.LIVEKIT_API_KEY,
+    process.env.LIVEKIT_API_SECRET,
+    { identity: "caller" }
+  );
 
-    at.addGrant({
-      roomJoin: true,
-      room: "call-room",
-      canPublish: true,
-      canSubscribe: true
-    });
+  at.addGrant({
+    roomJoin: true,
+    room: "call-room",
+    canPublish: true,
+    canSubscribe: true
+  });
 
-    res.json({
-      token: await at.toJwt(),
-      url: process.env.LIVEKIT_URL,
-      room: "call-room"
-    });
-  } catch (err) {
-    console.error("TOKEN ERROR:", err.message);
-    res.status(500).send("Token error");
-  }
+  res.json({
+    token: await at.toJwt(),
+    url: process.env.LIVEKIT_URL,
+    room: "call-room"
+  });
 });
 
 // =========================
@@ -54,6 +50,33 @@ app.post("/twilio-voice", (req, res) => {
   res.type("text/xml");
   res.send(twiml.toString());
 });
+
+// =========================
+// AUDIO CONVERSION (FIX STATIC)
+// =========================
+function convertToMulaw(buffer) {
+  return new Promise((resolve, reject) => {
+    const ffmpeg = spawn("ffmpeg", [
+      "-i", "pipe:0",
+      "-ar", "8000",
+      "-ac", "1",
+      "-f", "mulaw",
+      "pipe:1"
+    ]);
+
+    let output = Buffer.alloc(0);
+
+    ffmpeg.stdout.on("data", (chunk) => {
+      output = Buffer.concat([output, chunk]);
+    });
+
+    ffmpeg.on("close", () => resolve(output));
+    ffmpeg.on("error", reject);
+
+    ffmpeg.stdin.write(buffer);
+    ffmpeg.stdin.end();
+  });
+}
 
 // =========================
 // WEBSOCKET (TWILIO MEDIA)
@@ -97,7 +120,7 @@ wss.on("connection", (ws) => {
 
       console.log("AI:", reply);
 
-      // ElevenLabs TTS
+      // ElevenLabs
       const tts = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}`,
         {
@@ -115,12 +138,15 @@ wss.on("connection", (ws) => {
 
       const audioBuffer = Buffer.from(await tts.arrayBuffer());
 
-      // Send back to Twilio
+      // 🔥 CONVERT TO TWILIO FORMAT
+      const mulawAudio = await convertToMulaw(audioBuffer);
+
+      // send back
       ws.send(JSON.stringify({
         event: "media",
         streamSid,
         media: {
-          payload: audioBuffer.toString("base64")
+          payload: mulawAudio.toString("base64")
         }
       }));
 
@@ -149,19 +175,14 @@ wss.on("connection", (ws) => {
 });
 
 // =========================
-// GOOGLE SHEETS + DIALER
+// GOOGLE + DIALER
 // =========================
 const { getLeads } = require("./google");
 const { callLead } = require("./dialer");
 
 app.get("/test-leads", async (req, res) => {
-  try {
-    const leads = await getLeads();
-    res.json(leads);
-  } catch (err) {
-    console.error(err);
-    res.status(500).send("error fetching leads");
-  }
+  const leads = await getLeads();
+  res.json(leads);
 });
 
 app.get("/start-dialing", async (req, res) => {
