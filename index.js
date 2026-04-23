@@ -1,142 +1,53 @@
 const express = require("express");
 const http = require("http");
+const { AccessToken } = require("livekit-server-sdk");
 
 const app = express();
-app.use(express.urlencoded({ extended: true }));
-
-const ELEVEN_KEY = process.env.ELEVEN_KEY;
-const VOICE_ID = process.env.VOICE_ID;
-const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
-
-let lastAudio = null;
 
 // =========================
 // HEALTH
 // =========================
-app.get("/", (req, res) => res.send("OK"));
+app.get("/", (req, res) => {
+  res.send("LIVEKIT READY");
+});
 
 // =========================
-// FAST AI RESPONSE
+// TOKEN ENDPOINT
 // =========================
-async function getAIResponse(text) {
-  try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
-      method: "POST",
-      headers: {
-        "x-api-key": ANTHROPIC_KEY,
-        "content-type": "application/json",
-        "anthropic-version": "2023-06-01"
-      },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-5",
-        max_tokens: 15, // 🔥 fast
-        temperature: 0.7,
-        system: `
-You are Jack from Blackline.
+app.get("/token", (req, res) => {
+  const room = "call-room";
 
-Talk like a real human on the phone.
-VERY short responses (5–8 words).
-Casual, slightly messy, natural.
-`,
-        messages: [{ role: "user", content: text || "hello" }]
-      })
-    });
+  const identity =
+    req.query.identity ||
+    "user-" + Math.random().toString(36).substring(7);
 
-    const data = await res.json();
-
-    let output = "";
-    for (const b of data.content || []) {
-      if (b.type === "text") output += b.text;
-    }
-
-    return output.trim() || "gotcha";
-
-  } catch {
-    return "gotcha";
-  }
-}
-
-// =========================
-// VOICE LOOP
-// =========================
-app.all("/voice", async (req, res) => {
-  const speech = req.body.SpeechResult || "";
-
-  console.log("USER:", speech);
-
-  const aiReply = await getAIResponse(speech);
-
-  // 🔥 makes it feel instant
-  const reply = `yeah—${aiReply}`;
-
-  console.log("AI:", reply);
-
-  // =========================
-  // ELEVENLABS
-  // =========================
-  const tts = await fetch(
-    `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
-    {
-      method: "POST",
-      headers: {
-        "xi-api-key": ELEVEN_KEY,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({
-        text: reply,
-        model_id: "eleven_multilingual_v2",
-        voice_settings: {
-          stability: 0.3,
-          similarity_boost: 0.7,
-          style: 0.2,
-          use_speaker_boost: true
-        }
-      })
-    }
+  const at = new AccessToken(
+    process.env.LIVEKIT_API_KEY,
+    process.env.LIVEKIT_API_SECRET,
+    { identity }
   );
 
-  const buffer = Buffer.from(await tts.arrayBuffer());
-  lastAudio = buffer;
-
-  // cache buster (prevents static / caching issues)
-  const audioUrl = `https://${req.headers.host}/audio?ts=${Date.now()}`;
-
-  res.type("text/xml").send(`
-<Response>
-  <Play>${audioUrl}</Play>
-
-  <Gather 
-    input="speech"
-    action="/voice"
-    method="POST"
-    timeout="1"
-    speechTimeout="0.6"
-    bargeIn="true"
-  />
-
-  <Redirect>/voice</Redirect>
-</Response>
-  `);
-});
-
-// =========================
-// AUDIO DELIVERY (FIXED)
-// =========================
-app.get("/audio", (req, res) => {
-  if (!lastAudio) return res.status(404).send("No audio");
-
-  res.set({
-    "Content-Type": "audio/mpeg",
-    "Content-Length": lastAudio.length,
-    "Cache-Control": "no-cache, no-store, must-revalidate"
+  at.addGrant({
+    roomJoin: true,
+    room: room,
+    canPublish: true,
+    canSubscribe: true
   });
 
-  res.end(lastAudio);
+  const token = at.toJwt();
+
+  res.json({
+    token,
+    url: process.env.LIVEKIT_URL,
+    room
+  });
 });
 
 // =========================
-// START
+// START SERVER
 // =========================
-http.createServer(app).listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("RUNNING FAST PRODUCTION VERSION");
-});
+http
+  .createServer(app)
+  .listen(process.env.PORT || 3000, "0.0.0.0", () => {
+    console.log("LIVEKIT TOKEN SERVER RUNNING");
+  });
