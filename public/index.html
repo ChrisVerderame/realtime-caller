@@ -12,15 +12,17 @@
   <script>
     let ws;
     let currentAudio = null;
+
+    let speakingFrames = 0;
     let interruptTimeout = null;
+    let aiStartTime = 0;
+    let userStartedSpeakingAt = null;
 
     document.getElementById("startBtn").onclick = async () => {
       console.log("Starting...");
 
-      // 🔥 unlock audio
       const unlockCtx = new AudioContext();
       await unlockCtx.resume();
-      console.log("Audio unlocked");
 
       const res = await fetch("/token");
       const data = await res.json();
@@ -30,19 +32,10 @@
 
       await room.localParticipant.setMicrophoneEnabled(true);
 
-      console.log("MIC LIVE");
-
-      // =========================
-      // WEBSOCKET
-      // =========================
       ws = new WebSocket(`wss://${location.host}/`);
 
       ws.onopen = () => console.log("WS CONNECTED");
-      ws.onerror = (e) => console.error("WS ERROR", e);
 
-      // =========================
-      // MIC PIPELINE
-      // =========================
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
       const audioContext = new AudioContext({ sampleRate: 48000 });
@@ -52,7 +45,7 @@
 
       source.connect(processor);
 
-      // silent output (no echo)
+      // 🔇 silent output (keeps processing alive, no echo)
       const silentGain = audioContext.createGain();
       silentGain.gain.value = 0;
 
@@ -64,30 +57,50 @@
 
         const input = e.inputBuffer.getChannelData(0);
 
-        // 🔥 volume detection
+        // 🔊 volume detection
         let sum = 0;
         for (let i = 0; i < input.length; i++) {
           sum += Math.abs(input[i]);
         }
         const volume = sum / input.length;
 
-        // 🔥 NATURAL INTERRUPTION (delayed cut)
-        if (volume > 0.03 && currentAudio) {
+        // 🎙 detect sustained speaking
+        if (volume > 0.04) {
+          speakingFrames++;
+
+          if (!userStartedSpeakingAt) {
+            userStartedSpeakingAt = Date.now();
+          }
+        } else {
+          speakingFrames = 0;
+          userStartedSpeakingAt = null;
+        }
+
+        const aiTalkingLongEnough = Date.now() - aiStartTime > 800;
+
+        // 🧠 NATURAL OVERLAP INTERRUPTION
+        if (
+          speakingFrames > 3 &&
+          currentAudio &&
+          aiTalkingLongEnough &&
+          userStartedSpeakingAt &&
+          Date.now() - userStartedSpeakingAt > 600
+        ) {
           if (!interruptTimeout) {
             interruptTimeout = setTimeout(() => {
               if (currentAudio) {
-                console.log("INTERRUPT (delayed)");
+                console.log("INTERRUPT (natural overlap)");
                 currentAudio.pause();
                 currentAudio = null;
               }
               interruptTimeout = null;
-            }, 700); // allow AI to finish slightly
+            }, 300); // 👈 smooth finish
           }
         } else {
           interruptTimeout = null;
         }
 
-        // convert float → int16
+        // 🎧 send audio
         const buffer = new ArrayBuffer(input.length * 2);
         const view = new DataView(buffer);
 
@@ -99,19 +112,14 @@
         ws.send(buffer);
       };
 
-      // =========================
-      // PLAY AI AUDIO
-      // =========================
       ws.onmessage = (msg) => {
         console.log("AI AUDIO RECEIVED");
 
-        // stop previous audio (when new response comes in)
         if (currentAudio) {
           currentAudio.pause();
           currentAudio = null;
         }
 
-        // base64 → binary
         const byteCharacters = atob(msg.data);
         const byteNumbers = new Array(byteCharacters.length);
 
@@ -126,6 +134,9 @@
 
         const audio = new Audio(url);
         currentAudio = audio;
+
+        // 🧠 track when AI starts speaking
+        aiStartTime = Date.now();
 
         audio.play().catch(err => {
           console.error("Playback error:", err);
