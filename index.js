@@ -5,9 +5,6 @@ const WebSocket = require("ws");
 const app = express();
 app.use(express.urlencoded({ extended: true }));
 
-// =========================
-// ENV
-// =========================
 const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 
 // =========================
@@ -50,7 +47,7 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 // =========================
-// AI CALL FUNCTION
+// AI
 // =========================
 async function getAIResponse(history) {
   try {
@@ -63,34 +60,34 @@ async function getAIResponse(history) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-5",
-        max_tokens: 80,
-        temperature: 0.7,
+        max_tokens: 50,
+        temperature: 0.9,
         system: `
-You are Jack from Blackline Acquisitions.
+You are Jack from Blackline.
 
-You are calling about a property the person submitted.
+You are on a real phone call.
+
+TONE:
+- casual
+- slightly messy
+- not polished
+- not scripted
 
 STYLE:
-- casual
-- human
-- slightly imperfect
-- NOT robotic
-- short responses (1–2 sentences max)
+- 1 sentence most of the time
+- sometimes no question
+- sometimes just react
+- use fillers: "yeah", "honestly", "gotcha"
 
 RULES:
-- never ask for address
-- never ask about mortgage or price
-- don't interrogate
-- react naturally like a human
+- NEVER sound like customer service
+- NEVER explain too much
+- NEVER repeat phrasing
+- DON'T be overly helpful
 
 GOAL:
-- build light rapport
-- move toward setting up Chris to see the property
-
-IMPORTANT:
-- don't repeat yourself
-- don't sound scripted
-- sometimes just react without asking a question
+- keep it relaxed
+- move toward Chris seeing the property
 `,
         messages: history
       })
@@ -100,21 +97,19 @@ IMPORTANT:
 
     let text = "";
     if (data?.content) {
-      for (const block of data.content) {
-        if (block.type === "text") text += block.text;
+      for (const b of data.content) {
+        if (b.type === "text") text += b.text;
       }
     }
 
-    return text.trim();
-
+    return text.trim() || "yeah gotcha";
   } catch (err) {
-    console.log("AI ERROR:", err.message);
-    return "yeah gotcha — that makes sense";
+    return "yeah gotcha — makes sense";
   }
 }
 
 // =========================
-// CONVERSATION
+// CONVO
 // =========================
 relayWss.on("connection", (ws) => {
   console.log("RELAY CONNECTED");
@@ -132,44 +127,33 @@ relayWss.on("connection", (ws) => {
   ws.on("message", async (msg) => {
     try {
       const data = JSON.parse(msg);
-      console.log("RAW:", data);
 
-      // =========================
-      // START CALL
-      // =========================
+      // FIRST LINE
       if (data.type === "prompt" && !started) {
         started = true;
 
-        const opening = "Hey — this is Jack from Blackline. Did you fill something out about your property?";
-        
+        const opening = "hey — this is jack from blackline, did you fill out a form trying to sell your house?";
         history.push({ role: "assistant", content: opening });
         speak(opening);
         return;
       }
 
-      // =========================
-      // USER SPEECH
-      // =========================
+      // USER TALKING
       if (data.type === "prompt" && started) {
         const userText = data.voicePrompt || "";
-        console.log("USER:", userText);
 
         history.push({ role: "user", content: userText });
 
-        const aiReply = await getAIResponse(history);
+        const reply = await getAIResponse(history);
 
-        history.push({ role: "assistant", content: aiReply });
+        history.push({ role: "assistant", content: reply });
 
-        speak(aiReply);
+        speak(reply);
       }
 
     } catch (err) {
-      console.log("ERROR:", err.message);
+      console.log("ERR:", err.message);
     }
-  });
-
-  ws.on("close", () => {
-    console.log("RELAY CLOSED");
   });
 });
 
