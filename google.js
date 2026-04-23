@@ -6,12 +6,25 @@ async function getLeads() {
 
   return rows
     .map((row) => {
-      const [name, phone, address] = row.split(",");
+      let [name, phone, address] = row.split(",");
+
       if (!phone) return null;
+
+      // Clean all non-digits
+      let cleaned = phone.replace(/\D/g, "");
+
+      // Format to E.164
+      if (cleaned.length === 10) {
+        cleaned = "+1" + cleaned;
+      } else if (cleaned.length === 11 && cleaned.startsWith("1")) {
+        cleaned = "+" + cleaned;
+      } else {
+        cleaned = "+" + cleaned;
+      }
 
       return {
         name: name?.trim(),
-        phone: phone?.trim(),
+        phone: cleaned,
         address: address?.trim(),
       };
     })
