@@ -13,13 +13,17 @@ app.get("/", (req, res) => {
 });
 
 // =========================
-// TWILIO VOICE
+// TWILIO VOICE (WITH TTS)
 // =========================
 app.all("/voice", (req, res) => {
   res.type("text/xml").send(`
 <Response>
   <Connect>
-    <ConversationRelay url="wss://${req.headers.host}/relay" />
+    <ConversationRelay 
+      url="wss://${req.headers.host}/relay"
+      ttsProvider="google"
+      voice="en-US-Neural2-J"
+    />
   </Connect>
 </Response>
   `);
@@ -28,7 +32,7 @@ app.all("/voice", (req, res) => {
 const server = http.createServer(app);
 
 // =========================
-// RELAY WS
+// RELAY WEBSOCKET
 // =========================
 const relayWss = new WebSocket.Server({ noServer: true });
 
@@ -49,18 +53,25 @@ relayWss.on("connection", (ws) => {
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
-
       console.log("RAW:", data);
 
-      // 🔥 ConversationRelay sends speech like this
+      // 🔥 HANDLE TWILIO PROMPT (START OF CALL)
+      if (data.type === "prompt") {
+        const reply = "Hey — this is Jack from Blackline, can you hear me alright?";
+
+        ws.send(JSON.stringify({
+          type: "text",
+          token: reply
+        }));
+      }
+
+      // 🔥 HANDLE USER SPEECH
       if (data.type === "input_text") {
         const userText = data.text;
-
         console.log("USER:", userText);
 
         const reply = "yeah gotcha — sounds good";
 
-        // 🔥 CORRECT FORMAT
         ws.send(JSON.stringify({
           type: "text",
           token: reply
@@ -82,7 +93,7 @@ relayWss.on("connection", (ws) => {
 });
 
 // =========================
-// START
+// START SERVER
 // =========================
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
   console.log("RUNNING");
