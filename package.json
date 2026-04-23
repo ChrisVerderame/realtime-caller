@@ -1,12 +1,13 @@
 {
-  "name": "realtime-caller",
+  "name": "livekit-ai-caller",
   "version": "1.0.0",
   "main": "index.js",
+  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.18.2",
-    "ws": "^8.13.0"
+    "livekit-server-sdk": "^2.7.2"
   }
 }
