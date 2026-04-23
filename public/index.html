@@ -9,63 +9,63 @@
 
   <script src="https://unpkg.com/livekit-client/dist/livekit-client.umd.js"></script>
 
-<script>
-let ws;
+  <script>
+    let ws;
 
-document.getElementById("startBtn").onclick = async () => {
-  console.log("Starting...");
+    document.getElementById("startBtn").onclick = async () => {
+      console.log("Starting...");
 
-  const res = await fetch("/token");
-  const data = await res.json();
+      const res = await fetch("/token");
+      const data = await res.json();
 
-  const room = new LivekitClient.Room();
-  await room.connect(data.url, data.token);
+      const room = new LivekitClient.Room();
+      await room.connect(data.url, data.token);
 
-  await room.localParticipant.setMicrophoneEnabled(true);
+      await room.localParticipant.setMicrophoneEnabled(true);
 
-  // 🔥 CONNECT WS
-  ws = new WebSocket(`wss://${location.host}/`);
+      console.log("MIC LIVE");
 
-  ws.onopen = () => console.log("WS CONNECTED");
+      // 🔥 CONNECT WS
+      ws = new WebSocket(`wss://${location.host}/`);
 
-  // 🔥 RAW AUDIO PIPELINE
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      ws.onopen = () => console.log("WS CONNECTED");
 
-  const audioContext = new AudioContext({ sampleRate: 48000 });
-  const source = audioContext.createMediaStreamSource(stream);
+      // 🔥 RAW AUDIO PIPELINE
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-  const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      const audioContext = new AudioContext({ sampleRate: 48000 });
+      const source = audioContext.createMediaStreamSource(stream);
 
-  source.connect(processor);
-  processor.connect(audioContext.destination);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
-  processor.onaudioprocess = (e) => {
-    if (ws.readyState !== 1) return;
+      source.connect(processor);
 
-    const input = e.inputBuffer.getChannelData(0);
+      // ❌ IMPORTANT: DO NOT CONNECT TO DESTINATION (prevents echo)
 
-    // convert float32 → int16
-    const buffer = new ArrayBuffer(input.length * 2);
-    const view = new DataView(buffer);
+      processor.onaudioprocess = (e) => {
+        if (ws.readyState !== 1) return;
 
-    for (let i = 0; i < input.length; i++) {
-      let s = Math.max(-1, Math.min(1, input[i]));
-      view.setInt16(i * 2, s * 0x7fff, true);
-    }
+        const input = e.inputBuffer.getChannelData(0);
 
-    ws.send(buffer);
-  };
+        const buffer = new ArrayBuffer(input.length * 2);
+        const view = new DataView(buffer);
 
-  // 🔥 PLAY AI RESPONSE
-  ws.onmessage = (msg) => {
-    console.log("AI AUDIO RECEIVED");
+        for (let i = 0; i < input.length; i++) {
+          let s = Math.max(-1, Math.min(1, input[i]));
+          view.setInt16(i * 2, s * 0x7fff, true);
+        }
 
-    const audio = new Audio(
-      "data:audio/mp3;base64," + msg.data
-    );
-    audio.play();
-  };
-};
-</script>
+        ws.send(buffer);
+      };
+
+      // 🔥 PLAY AI RESPONSE
+      ws.onmessage = (msg) => {
+        const audio = new Audio(
+          "data:audio/mp3;base64," + msg.data
+        );
+        audio.play();
+      };
+    };
+  </script>
 </body>
 </html>
