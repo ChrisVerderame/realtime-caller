@@ -11,8 +11,14 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const ELEVEN_KEY = process.env.ELEVEN_KEY;
 const VOICE_ID = process.env.VOICE_ID;
 
+// =========================
+// HEALTH
+// =========================
 app.get("/", (req, res) => res.send("OK"));
 
+// =========================
+// TWIML ENTRY
+// =========================
 app.all("/voice", (req, res) => {
   res.type("text/xml").send(`
 <Response>
@@ -39,63 +45,32 @@ server.on("upgrade", (req, socket, head) => {
 });
 
 // =========================
-// SAFE μ-LAW
-// =========================
-function linearToMulaw(sample) {
-  const BIAS = 33;
-  const CLIP = 32635;
-
-  let sign = (sample >> 8) & 0x80;
-  if (sign) sample = -sample;
-
-  if (sample > CLIP) sample = CLIP;
-  sample += BIAS;
-
-  let exponent = 7;
-  for (let expMask = 0x4000; (sample & expMask) === 0 && exponent > 0; expMask >>= 1) {
-    exponent--;
-  }
-
-  let mantissa = (sample >> (exponent + 3)) & 0x0F;
-  return ~(sign | (exponent << 4) | mantissa) & 0xFF;
-}
-
-function pcm16ToMulaw(buffer) {
-  // 🔥 ensure even length
-  const safeLength = buffer.length - (buffer.length % 2);
-
-  const out = Buffer.alloc(safeLength / 2);
-
-  for (let i = 0, j = 0; i < safeLength; i += 2, j++) {
-    const sample = buffer.readInt16LE(i);
-    out[j] = linearToMulaw(sample);
-  }
-
-  return out;
-}
-
-// =========================
 // AI
 // =========================
 async function getAIResponse(text) {
-  const res = await fetch("https://api.anthropic.com/v1/messages", {
-    method: "POST",
-    headers: {
-      "x-api-key": ANTHROPIC_KEY,
-      "content-type": "application/json",
-      "anthropic-version": "2023-06-01"
-    },
-    body: JSON.stringify({
-      model: "claude-sonnet-4-5",
-      max_tokens: 60,
-      temperature: 0.9,
-      system: "Casual, short, human.",
-      messages: [{ role: "user", content: text }]
-    })
-  });
+  try {
+    const res = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "x-api-key": ANTHROPIC_KEY,
+        "content-type": "application/json",
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: "claude-sonnet-4-5",
+        max_tokens: 50,
+        temperature: 0.9,
+        system: "Casual, human, short. One sentence.",
+        messages: [{ role: "user", content: text }]
+      })
+    });
 
-  const data = await res.json();
-  return data.content?.[0]?.text || "yeah gotcha";
+    const data = await res.json();
+    return data.content?.[0]?.text || "yeah gotcha";
+
+  } catch {
+    return "yeah gotcha";
+  }
 }
 
 // =========================
@@ -123,7 +98,7 @@ wss.on("connection", (ws) => {
     const reply = await getAIResponse(transcript);
     console.log("AI:", reply);
 
-    // 🔥 GET PCM
+    // 🔥 GET ELEVENLABS AUDIO (ULAW)
     const tts = await fetch(
       `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
       {
@@ -135,32 +110,20 @@ wss.on("connection", (ws) => {
         body: JSON.stringify({
           text: reply,
           model_id: "eleven_turbo_v2",
-          output_format: "pcm_16000"
+          output_format: "ulaw_8000"
         })
       }
     );
 
-    const pcm = Buffer.from(await tts.arrayBuffer());
+    const audio = Buffer.from(await tts.arrayBuffer());
 
-    // 🔥 SAFE DOWNSAMPLE (16k → 8k)
-    const downsampled = Buffer.alloc(Math.floor(pcm.length / 2));
-
-    let writeIndex = 0;
-    for (let i = 0; i + 3 < pcm.length; i += 4) {
-      downsampled[writeIndex++] = pcm[i];
-      downsampled[writeIndex++] = pcm[i + 1];
-    }
-
-    const trimmed = downsampled.slice(0, writeIndex);
-
-    const mulaw = pcm16ToMulaw(trimmed);
-
+    // 🔥 CLEAN CHUNKING
     const chunkSize = 320;
 
-    for (let i = 0; i < mulaw.length; i += chunkSize) {
+    for (let i = 0; i + chunkSize <= audio.length; i += chunkSize) {
       if (ws.readyState !== 1 || !streamSid) break;
 
-      const chunk = mulaw.slice(i, i + chunkSize);
+      const chunk = audio.slice(i, i + chunkSize);
 
       ws.send(JSON.stringify({
         event: "media",
@@ -193,5 +156,5 @@ wss.on("connection", (ws) => {
 // START
 // =========================
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
-  console.log("RUNNING FINAL STABLE");
+  console.log("RUNNING FINAL");
 });
