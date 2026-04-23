@@ -10,49 +10,53 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 // =========================
-// TOKEN
+// TOKEN ENDPOINT
 // =========================
 app.get("/token", async (req, res) => {
-  const room = "call-room";
+  try {
+    const room = "call-room";
 
-  const identity =
-    req.query.identity ||
-    "user-" + Math.random().toString(36).substring(7);
+    const identity =
+      req.query.identity ||
+      "user-" + Math.random().toString(36).substring(7);
 
-  const at = new AccessToken(
-    process.env.LIVEKIT_API_KEY,
-    process.env.LIVEKIT_API_SECRET,
-    { identity }
-  );
+    const at = new AccessToken(
+      process.env.LIVEKIT_API_KEY,
+      process.env.LIVEKIT_API_SECRET,
+      { identity }
+    );
 
-  at.addGrant({
-    roomJoin: true,
-    room,
-    canPublish: true,
-    canSubscribe: true
-  });
+    at.addGrant({
+      roomJoin: true,
+      room,
+      canPublish: true,
+      canSubscribe: true
+    });
 
-  res.json({
-    token: await at.toJwt(),
-    url: process.env.LIVEKIT_URL,
-    room
-  });
+    const token = await at.toJwt();
+
+    res.json({
+      token,
+      url: process.env.LIVEKIT_URL,
+      room
+    });
+
+  } catch (err) {
+    console.error("TOKEN ERROR:", err.message);
+    res.status(500).send("Token error");
+  }
 });
 
 // =========================
-// WS
+// REALTIME AI WS
 // =========================
 wss.on("connection", (ws) => {
   console.log("AI WS CONNECTED");
 
   let history = [];
+  let lastTranscript = "";
   let isThinking = false;
   let lastResponseTime = 0;
-
-  // 🧠 CALL STATE
-  let stage = "intro"; // intro → owner → address → conversation
-  let introDone = false;
-  let lastTranscript = "";
 
   const dg = new WebSocket(
     "wss://api.deepgram.com/v1/listen?encoding=linear16&sample_rate=48000",
@@ -62,19 +66,19 @@ wss.on("connection", (ws) => {
   dg.on("message", async (msg) => {
     try {
       const data = JSON.parse(msg);
+
       let transcript = data.channel?.alternatives?.[0]?.transcript;
       if (!transcript) return;
 
       if (!data.is_final) return;
 
-      // 🔥 normalize transcript (prevents duplicates)
       transcript = transcript.toLowerCase().trim();
 
       if (transcript === lastTranscript) return;
       lastTranscript = transcript;
 
       const now = Date.now();
-      if (now - lastResponseTime < 1200) return;
+      if (now - lastResponseTime < 1000) return;
       lastResponseTime = now;
 
       if (isThinking) return;
@@ -85,19 +89,7 @@ wss.on("connection", (ws) => {
       history.push({ role: "user", content: transcript });
 
       // =========================
-      // STAGE CONTROL
-      // =========================
-      if (!introDone) {
-        introDone = true;
-      }
-
-      // move stages based on convo
-      if (stage === "intro") stage = "owner";
-      else if (stage === "owner") stage = "address";
-      else if (stage === "address") stage = "conversation";
-
-      // =========================
-      // AI
+      // AI RESPONSE
       // =========================
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
@@ -108,44 +100,54 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 60,
-          temperature: 0.9,
+          max_tokens: 40,
+          temperature: 0.95,
           system: `
 You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
 
-This is the first time you're speaking to them.
-
-Speak like a normal person:
+Speak like a real person:
 - casual
-- direct
-- not overly structured
-- not robotic
+- quick
+- slightly imperfect
+- not scripted
 
 Opening:
-- Keep it simple and natural
-- The first thing you should ever do is confirm the name and the form that was filled out in regard to the address
+"hey—this is Jack from Blackline, just reaching out about a form you filled out… were you looking to sell [address]?"
 
-Example style:
-"hey—this is Manny from Blackline, just reaching out about a form you filled out… were you looking to sell [address]?"
+Conversation style:
+- react FIRST, then respond
+- acknowledge naturally:
+  "gotcha"
+  "yeah that makes sense"
+  "okay I hear you"
 
 Do NOT:
-- stack multiple confirmations
-- ask things in a rigid sequence
-- sound like you're checking boxes
+- stack questions
+- over-confirm things
+- sound robotic
+- repeat yourself
 
 Flow:
-- Ask naturally, not formally
-- If they confirm, move forward immediately
-- Do NOT re-ask something they already answered
+- if they confirm → move forward naturally
+- don’t re-ask things already answered
 
-If wrong person:
-- apologize quickly and end call
+Positioning:
+- you're just figuring out their situation
+- not selling anything
 
-If correct:
-- have a normal conversation
+Explain naturally:
+"yeah—we do buy houses, we just don’t throw numbers out over the phone… wouldn’t really be fair if something’s off in person"
 
-Goal:
-- if it makes sense, set a quick in-person visit with Chris (the buyer)
+Appointments:
+- Chris handles appointments
+- say naturally:
+  "Chris can swing by real quick"
+  "he handles that side"
+
+Numbers:
+- speak naturally
+- NEVER say "dot"
+- say "10.10" as "ten ten"
 
 Tone:
 - relaxed
@@ -153,32 +155,22 @@ Tone:
 - low pressure
 
 Important:
-- one question at a time
-- don’t over-explain
-- don’t repeat yourself
-- don’t restart the intro
-
-Speak like:
-- a guy following up
-NOT
-- a company verifying information
-
-Current stage: ${stage}
-Intro already done: ${introDone}
+- respond to what they said first
+- then guide conversation
 `,
           messages: history.slice(-6)
         })
       });
 
       const aiData = await aiRes.json();
-      let reply = aiData.content?.[0]?.text || "okay";
+      let reply = aiData.content?.[0]?.text || "yeah";
 
       console.log("AI:", reply);
 
       history.push({ role: "assistant", content: reply });
 
       // =========================
-      // TTS
+      // ELEVENLABS (FAST + HUMAN)
       // =========================
       const ttsRes = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}?output_format=mp3_44100_128`,
@@ -193,33 +185,39 @@ Intro already done: ${introDone}
             model_id: "eleven_multilingual_v2",
             optimize_streaming_latency: 0,
             voice_settings: {
-              stability: 0.25,
-              similarity_boost: 0.75,
-              style: 0.4,
+              stability: 0.15,
+              similarity_boost: 0.8,
+              style: 0.6,
               use_speaker_boost: true
             }
           })
         }
       );
 
-      const audioBuffer = Buffer.from(await ttsRes.arrayBuffer());
+      const arrayBuffer = await ttsRes.arrayBuffer();
+      const audioBuffer = Buffer.from(arrayBuffer);
 
       ws.send(audioBuffer.toString("base64"));
 
     } catch (err) {
-      console.error(err);
+      console.error("PROCESS ERROR:", err);
     } finally {
       isThinking = false;
     }
   });
 
   ws.on("message", (msg) => {
-    if (dg.readyState === 1) dg.send(msg);
+    if (dg.readyState === 1) {
+      dg.send(msg);
+    }
   });
 
   ws.on("close", () => dg.close());
 });
 
+// =========================
+// START SERVER
+// =========================
 server.listen(process.env.PORT || 3000, () => {
-  console.log("SERVER RUNNING");
+  console.log("REALTIME AI SERVER RUNNING");
 });
