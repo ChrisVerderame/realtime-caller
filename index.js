@@ -10,8 +10,14 @@ const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
 const ELEVEN_KEY = process.env.ELEVEN_KEY;
 const VOICE_ID = process.env.VOICE_ID;
 
+// =========================
+// HEALTH
+// =========================
 app.get("/", (req, res) => res.send("OK"));
 
+// =========================
+// TWILIO ENTRY
+// =========================
 app.all("/voice", (req, res) => {
   res.type("text/xml").send(`
 <Response>
@@ -23,7 +29,21 @@ app.all("/voice", (req, res) => {
 });
 
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+
+// =========================
+// WEBSOCKET (FIXED ROUTING)
+// =========================
+const wss = new WebSocket.Server({ noServer: true });
+
+server.on("upgrade", (req, socket, head) => {
+  if (req.url === "/media") {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  } else {
+    socket.destroy();
+  }
+});
 
 // =========================
 // AI
@@ -42,9 +62,11 @@ async function getAIResponse(history) {
         max_tokens: 50,
         temperature: 0.9,
         system: `
+You are Jack from Blackline.
+
 Casual, human, short.
-1 sentence max.
-Use "yeah", "honestly", "gotcha".
+1 sentence most of the time.
+Use fillers like "yeah", "honestly", "gotcha".
 Don't sound scripted.
 `,
         messages: history
@@ -87,10 +109,15 @@ wss.on("connection", (ws) => {
 
   dg.on("open", () => console.log("DG CONNECTED"));
 
+  dg.on("error", (err) => {
+    console.log("DG ERROR:", err.message);
+  });
+
   dg.on("message", async (msg) => {
     try {
       const data = JSON.parse(msg);
 
+      // only final transcripts
       if (!data.is_final) return;
 
       const transcript = data.channel?.alternatives?.[0]?.transcript;
@@ -108,7 +135,7 @@ wss.on("connection", (ws) => {
       if (!streamReady) return;
 
       // =========================
-      // ELEVENLABS (BUFFERED)
+      // ELEVENLABS AUDIO
       // =========================
       const tts = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}`,
@@ -128,7 +155,7 @@ wss.on("connection", (ws) => {
 
       const buffer = Buffer.from(await tts.arrayBuffer());
 
-      // 🔥 WAIT A MOMENT (CRITICAL STABILITY FIX)
+      // small delay stabilizes stream
       await new Promise(r => setTimeout(r, 100));
 
       const chunkSize = 320;
@@ -149,10 +176,13 @@ wss.on("connection", (ws) => {
       }
 
     } catch (err) {
-      console.log("ERROR:", err.message);
+      console.log("DG MSG ERROR:", err.message);
     }
   });
 
+  // =========================
+  // TWILIO AUDIO → DEEPGRAM
+  // =========================
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
@@ -177,8 +207,15 @@ wss.on("connection", (ws) => {
     dg.close();
     console.log("CALL ENDED");
   });
+
+  ws.on("error", (err) => {
+    console.log("WS CONNECTION ERROR:", err.message);
+  });
 });
 
+// =========================
+// START
+// =========================
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
   console.log("RUNNING");
 });
