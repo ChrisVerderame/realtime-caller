@@ -6,18 +6,16 @@ const app = express();
 app.use(express.urlencoded({ extended: true }));
 
 // =========================
-// HEALTH CHECK
+// HEALTH
 // =========================
 app.get("/", (req, res) => {
   res.send("OK");
 });
 
 // =========================
-// TWILIO VOICE ENTRY
+// TWILIO ENTRY
 // =========================
 app.all("/voice", (req, res) => {
-  console.log("VOICE HIT");
-
   res.type("text/xml").send(`
 <Response>
   <Connect>
@@ -28,39 +26,155 @@ app.all("/voice", (req, res) => {
 });
 
 // =========================
-// WEBSOCKET SERVER
+// SERVER + WS
 // =========================
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// =========================
+// ENV
+// =========================
+const DEEPGRAM_KEY = process.env.DEEPGRAM_KEY;
+const ANTHROPIC_KEY = process.env.ANTHROPIC_KEY;
+const ELEVEN_KEY = process.env.ELEVEN_KEY;
+const VOICE_ID = process.env.VOICE_ID;
+
+// =========================
+// WS CONNECTION
+// =========================
 wss.on("connection", (ws) => {
   console.log("CALL CONNECTED");
 
+  let history = [];
+
+  // 🔥 CONNECT TO DEEPGRAM
+  const dg = new WebSocket(
+    "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000",
+    {
+      headers: { Authorization: `Token ${DEEPGRAM_KEY}` }
+    }
+  );
+
+  dg.on("open", () => console.log("DG CONNECTED"));
+
+  dg.on("message", async (msg) => {
+    try {
+      const data = JSON.parse(msg);
+      const transcript = data.channel?.alternatives?.[0]?.transcript;
+
+      if (!transcript || transcript.length < 2) return;
+
+      console.log("USER:", transcript);
+
+      history.push({ role: "user", content: transcript });
+
+      // =========================
+      // AI
+      // =========================
+      const ai = await fetch("https://api.anthropic.com/v1/messages", {
+        method: "POST",
+        headers: {
+          "x-api-key": ANTHROPIC_KEY,
+          "content-type": "application/json",
+          "anthropic-version": "2023-06-01"
+        },
+        body: JSON.stringify({
+          model: "claude-sonnet-4-5",
+          max_tokens: 60,
+          temperature: 0.7,
+          system: `
+You are Jack from Blackline.
+
+Speak casually like a normal human.
+
+Goal:
+- build light rapport
+- move toward Chris seeing the property
+
+Mention naturally:
+"Chris handles everything in person and can swing by"
+
+Keep replies short.
+`,
+          messages: history
+        })
+      });
+
+      const aiData = await ai.json();
+
+      let reply = "";
+      if (aiData?.content) {
+        for (const b of aiData.content) {
+          if (b.type === "text") reply += b.text;
+        }
+      }
+
+      reply = reply.trim();
+      history.push({ role: "assistant", content: reply });
+
+      console.log("AI:", reply);
+
+      // =========================
+      // ELEVEN STREAM
+      // =========================
+      const tts = await fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream`,
+        {
+          method: "POST",
+          headers: {
+            "xi-api-key": ELEVEN_KEY,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            text: reply,
+            model_id: "eleven_turbo_v2"
+          })
+        }
+      );
+
+      const reader = tts.body.getReader();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        ws.send(JSON.stringify({
+          event: "media",
+          media: {
+            payload: Buffer.from(value).toString("base64")
+          }
+        }));
+      }
+
+    } catch (err) {
+      console.log("AI ERROR", err);
+    }
+  });
+
+  // =========================
+  // TWILIO AUDIO → DEEPGRAM
+  // =========================
   ws.on("message", (msg) => {
     try {
       const data = JSON.parse(msg);
 
-      if (data.event === "start") {
-        console.log("STREAM STARTED");
-      }
-
       if (data.event === "media") {
-        // 🔥 FOR NOW: just log incoming audio packets
-        console.log("AUDIO RECEIVED");
+        dg.send(Buffer.from(data.media.payload, "base64"));
       }
 
     } catch (err) {
-      console.log("ERROR:", err);
+      console.log("WS ERROR", err);
     }
   });
 
   ws.on("close", () => {
     console.log("CALL ENDED");
+    dg.close();
   });
 });
 
 // =========================
-// START SERVER (RAILWAY SAFE)
+// START
 // =========================
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
   console.log("RUNNING");
