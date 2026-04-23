@@ -11,7 +11,7 @@ const wss = new WebSocket.Server({ server });
 app.use(express.static("public"));
 
 // =========================
-// TOKEN ENDPOINT
+// TOKEN
 // =========================
 app.get("/token", async (req, res) => {
   const at = new AccessToken(
@@ -35,7 +35,7 @@ app.get("/token", async (req, res) => {
 });
 
 // =========================
-// TWILIO VOICE WEBHOOK
+// TWILIO WEBHOOK
 // =========================
 app.post("/twilio-voice", (req, res) => {
   const VoiceResponse = require("twilio").twiml.VoiceResponse;
@@ -52,7 +52,7 @@ app.post("/twilio-voice", (req, res) => {
 });
 
 // =========================
-// AUDIO CONVERSION (FIX STATIC)
+// AUDIO CONVERSION
 // =========================
 function convertToMulaw(buffer) {
   return new Promise((resolve, reject) => {
@@ -79,12 +79,13 @@ function convertToMulaw(buffer) {
 }
 
 // =========================
-// WEBSOCKET (TWILIO MEDIA)
+// WEBSOCKET (CALL ENGINE)
 // =========================
 wss.on("connection", (ws) => {
   console.log("TWILIO CONNECTED");
 
   let streamSid = null;
+  let history = [];
 
   const dg = new WebSocket(
     "wss://api.deepgram.com/v1/listen?encoding=mulaw&sample_rate=8000",
@@ -100,7 +101,11 @@ wss.on("connection", (ws) => {
 
       console.log("USER:", transcript);
 
-      // Claude
+      history.push({ role: "user", content: transcript });
+
+      // =========================
+      // CLAUDE (YOUR REAL PROMPT)
+      // =========================
       const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
@@ -110,8 +115,33 @@ wss.on("connection", (ws) => {
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
-          max_tokens: 60,
-          messages: [{ role: "user", content: transcript }]
+          max_tokens: 70,
+          temperature: 0.95,
+          system: `
+You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
+
+Speak like a real person on the phone:
+- casual, direct, slightly imperfect
+- short natural phrases
+- never robotic
+
+OPENING:
+“hey—this is Jack from Blackline, just reaching out about a form you filled out… were you looking to sell the house?”
+
+FLOW:
+- acknowledge → react → respond
+- one question at a time
+- don’t repeat yourself
+
+APPOINTMENT:
+“honestly easiest thing—Chris can just swing by and take a look, super quick”
+
+TONE:
+- relaxed
+- conversational
+- confident
+`,
+          messages: history.slice(-6)
         })
       });
 
@@ -120,7 +150,11 @@ wss.on("connection", (ws) => {
 
       console.log("AI:", reply);
 
-      // ElevenLabs
+      history.push({ role: "assistant", content: reply });
+
+      // =========================
+      // ELEVENLABS
+      // =========================
       const tts = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}`,
         {
@@ -138,10 +172,8 @@ wss.on("connection", (ws) => {
 
       const audioBuffer = Buffer.from(await tts.arrayBuffer());
 
-      // 🔥 CONVERT TO TWILIO FORMAT
       const mulawAudio = await convertToMulaw(audioBuffer);
 
-      // send back
       ws.send(JSON.stringify({
         event: "media",
         streamSid,
