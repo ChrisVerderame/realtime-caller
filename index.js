@@ -6,60 +6,33 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// REQUIRED for Twilio POST
 app.use(express.urlencoded({ extended: true }));
 
-// =========================
-// TWILIO WEBHOOK
-// =========================
-app.post("/voice", (req, res) => {
-  res.type("text/xml").send(`
+// ✅ HEALTH CHECK (IMPORTANT)
+app.get("/", (req, res) => {
+  res.send("SERVER RUNNING");
+});
+
+// ✅ TWILIO ROUTE (SAFE)
+app.all("/voice", (req, res) => {
+  console.log("VOICE HIT");
+
+  res.set("Content-Type", "text/xml");
+
+  res.send(`
 <Response>
-  <Connect>
-    <Stream url="wss://${req.headers.host}/media" />
-  </Connect>
+  <Say>Connected</Say>
 </Response>
   `);
 });
 
-// =========================
-// WEBSOCKET HANDLER
-// =========================
+// ✅ WEBSOCKET (we'll use later)
 wss.on("connection", (ws) => {
-  console.log("CALL CONNECTED");
-
-  ws.on("message", (msg) => {
-    try {
-      const data = JSON.parse(msg);
-
-      if (data.event === "start") {
-        console.log("STREAM STARTED");
-      }
-
-      if (data.event === "media") {
-        // 🔥 FOR NOW: just respond instantly (no AI yet)
-        const reply = "Hey — just testing the real time connection";
-
-        ws.send(JSON.stringify({
-          event: "media",
-          media: {
-            payload: Buffer.from(reply).toString("base64")
-          }
-        }));
-      }
-
-    } catch (err) {
-      console.log("ERROR:", err);
-    }
-  });
-
-  ws.on("close", () => {
-    console.log("CALL ENDED");
-  });
+  console.log("WS CONNECTED");
 });
 
-// =========================
-// START SERVER
-// =========================
+// ✅ START SERVER (RAILWAY SAFE)
 server.listen(process.env.PORT || 3000, "0.0.0.0", () => {
   console.log("RUNNING");
 });
