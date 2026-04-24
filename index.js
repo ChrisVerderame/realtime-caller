@@ -96,7 +96,7 @@ app.post("/call", async (req, res) => {
   twiml: `
     <Response>
       <Dial answerOnBridge="true">
-        <Sip>sip:${process.env.LIVEKIT_SIP_ENDPOINT}?room=call-room</Sip>
+        <Sip>sip:${process.env.LIVEKIT_SIP_ENDPOINT}?room=call-room1</Sip>
       </Dial>
     </Response>
   `
@@ -112,7 +112,7 @@ app.post("/call", async (req, res) => {
 // ---- TOKEN ----
 app.get("/token", async (req, res) => {
   try {
-    const room = "call-room-test";
+    const room = "call-room-1";
     const identity =
       req.query.identity ||
       "user-" + Math.random().toString(36).substring(7);
