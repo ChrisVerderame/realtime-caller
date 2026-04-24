@@ -5,10 +5,7 @@ const client = twilio(
   process.env.TWILIO_AUTH
 );
 
-// normalize phone → +1XXXXXXXXXX
 function normalizePhone(phone) {
-  if (!phone) return null;
-
   const digits = phone.replace(/\D/g, "");
 
   if (digits.length === 10) return "+1" + digits;
@@ -22,21 +19,21 @@ async function callLead(lead) {
     const to = normalizePhone(lead.phone);
 
     if (!to) {
-      console.error("❌ Invalid phone:", lead.phone);
+      console.error("Invalid phone:", lead.phone);
       return;
     }
 
-    // 🔥 FINAL SIP TARGET (forces trunk match + TLS)
-    const sip = `sips:call-room@${process.env.LIVEKIT_SIP_ENDPOINT};transport=tls`;
+    // 🔥 THIS is the important line
+    const sip = "sips:call-room@3l6qw17ipmp.sip.livekit.cloud;transport=tls";
 
-    console.log("📞 CALLING:", to);
-    console.log("➡️ SIP TARGET:", sip);
+    console.log("CALLING:", to);
+    console.log("SIP TARGET:", sip);
 
-    const call = await client.calls.create({
+    await client.calls.create({
       to,
       from: process.env.TWILIO_NUMBER,
 
-      // 🔥 MUST use twiml (not url)
+      // 👇 THIS is TwiML (just instructions)
       twiml: `
         <Response>
           <Dial>
@@ -46,12 +43,8 @@ async function callLead(lead) {
       `
     });
 
-    console.log("✅ Call SID:", call.sid);
-
-    return call;
-
   } catch (err) {
-    console.error("❌ CALL ERROR:", err.message);
+    console.error("CALL ERROR:", err.message);
   }
 }
 
