@@ -4,6 +4,15 @@ const WebSocket = require("ws");
 const { AccessToken } = require("livekit-server-sdk");
 const twilio = require("twilio");
 
+// ensure fetch works on Railway
+let fetchFn;
+try {
+  fetchFn = global.fetch ? global.fetch : require("node-fetch");
+} catch {
+  fetchFn = (...args) => import("node-fetch").then(({ default: f }) => f(...args));
+}
+const fetch = fetchFn;
+
 const app = express();
 app.use(express.static("public"));
 app.use(express.json());
@@ -12,7 +21,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 // =========================
-// TWILIO CLIENT (NEW)
+// TWILIO
 // =========================
 const client = twilio(
   process.env.TWILIO_SID,
@@ -20,20 +29,16 @@ const client = twilio(
 );
 
 // =========================
-// SIMPLE UI (BUTTON)
+// UI
 // =========================
 app.get("/", (req, res) => {
   res.send(`
     <html>
       <body style="font-family:sans-serif;padding:40px;">
-        <h2>LiveKit AI Caller</h2>
-
+        <h2>AI Caller</h2>
         <input id="phone" placeholder="+1203..." style="padding:10px;width:250px;" />
         <br><br>
-
-        <button onclick="callLead()" style="padding:10px 20px;">
-          Call Lead
-        </button>
+        <button onclick="callLead()">Call Lead</button>
 
         <script>
           async function callLead() {
@@ -54,7 +59,7 @@ app.get("/", (req, res) => {
 });
 
 // =========================
-// CALL ENDPOINT (NEW)
+// CALL ENDPOINT
 // =========================
 app.post("/call", async (req, res) => {
   try {
@@ -88,7 +93,7 @@ app.post("/call", async (req, res) => {
 });
 
 // =========================
-// TOKEN ENDPOINT (UNCHANGED)
+// TOKEN
 // =========================
 app.get("/token", async (req, res) => {
   try {
@@ -126,7 +131,7 @@ app.get("/token", async (req, res) => {
 });
 
 // =========================
-// REALTIME AI WS (UNCHANGED)
+// REALTIME AI
 // =========================
 wss.on("connection", (ws) => {
   console.log("AI WS CONNECTED");
@@ -176,7 +181,51 @@ wss.on("connection", (ws) => {
           model: "claude-sonnet-4-5",
           max_tokens: 70,
           temperature: 0.95,
-          system: `YOUR ORIGINAL PROMPT HERE`,
+          system: `
+You are Jack from Blackline calling a homeowner who filled out a form about possibly selling their house.
+
+Speak like a real person on the phone:
+- casual, direct, slightly imperfect
+- not scripted, not overly polished
+- short, natural phrases
+- always finish your sentence naturally. Never cut off mid-sentence though
+- Keep responses short, but always complete
+
+Write for voice, not text:
+- use contractions (I’m, we’re, that’s)
+- keep things conversational
+- use light fillers naturally (yeah, gotcha, okay)
+- use soft transitions (so, gotcha—so, okay so)
+
+Questions should feel natural:
+- “what’s your timeline looking like?”
+- “are you the owner there?”
+- avoid blunt or robotic phrasing
+
+OPENING:
+“hey—this is Jack from Blackline, just reaching out about a form you filled out… were you looking to sell [address]?”
+
+CONVERSATION STYLE:
+→ acknowledge → react → respond
+
+FLOW:
+“yeah—it really just depends on the house… we’re usually making market-based offers depending on the condition”
+
+IF ASKED:
+“Chris handles all that…”
+
+APPOINTMENT:
+“what’s usually better for you, later today or tomorrow?”
+
+RULES:
+- no scripting
+- no stacking questions
+- no repeating
+- no asking for price
+
+TONE:
+natural, relaxed, confident
+          `,
           messages: history.slice(-6)
         })
       });
@@ -221,8 +270,6 @@ wss.on("connection", (ws) => {
   ws.on("close", () => dg.close());
 });
 
-// =========================
-// START SERVER
 // =========================
 server.listen(process.env.PORT || 3000, () => {
   console.log("REALTIME AI SERVER RUNNING");
