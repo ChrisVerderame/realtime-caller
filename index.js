@@ -112,7 +112,7 @@ app.post("/call", async (req, res) => {
 // ---- TOKEN ----
 app.get("/token", async (req, res) => {
   try {
-    const room = "call-room";
+    const room = "call-room-test";
     const identity =
       req.query.identity ||
       "user-" + Math.random().toString(36).substring(7);
