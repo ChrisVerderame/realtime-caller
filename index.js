@@ -40,11 +40,11 @@ app.post("/call", async (req, res) => {
 
       // ✅ FIXED (CONNECT)
       twiml: `
-        <Response>
-          <Connect>
-            <Sip>sip:${process.env.LIVEKIT_SIP_ENDPOINT}</Sip>
-          </Connect>
-        </Response>
+<Response>
+  <Connect>
+    <Sip>sip:caller@${process.env.LIVEKIT_SIP_ENDPOINT}</Sip>
+  </Connect>
+</Response>
       `
     });
 
