@@ -27,7 +27,7 @@ async function callLead(lead) {
     }
 
     // 🔥 CRITICAL FIX: include username (caller@)
-    const sip = `sip:caller@${process.env.LIVEKIT_SIP_ENDPOINT};transport=tls`;
+    const sip = `sip:call-room@${process.env.LIVEKIT_SIP_ENDPOINT};transport=tls`;
 
     console.log("📞 CALLING:", to);
     console.log("➡️ SIP TARGET:", sip);
