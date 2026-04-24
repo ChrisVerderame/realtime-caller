@@ -5,7 +5,6 @@ const client = twilio(
   process.env.TWILIO_AUTH
 );
 
-// normalize phone to E.164 (+1XXXXXXXXXX)
 function normalizePhone(phone) {
   if (!phone) return null;
 
@@ -13,7 +12,6 @@ function normalizePhone(phone) {
 
   if (digits.length === 10) return "+1" + digits;
   if (digits.length === 11 && digits.startsWith("1")) return "+" + digits;
-  if (digits.startsWith("+")) return digits;
 
   return null;
 }
@@ -27,24 +25,31 @@ async function callLead(lead) {
       return;
     }
 
-    const sipTarget = `sip:${process.env.LIVEKIT_SIP_ENDPOINT};transport=tls`;
+    const sip = `sip:${process.env.LIVEKIT_SIP_ENDPOINT};transport=tls`;
 
     console.log("📞 CALLING:", to);
-    console.log("➡️  SIP TARGET:", sipTarget);
+    console.log("➡️ SIP TARGET:", sip);
 
     const call = await client.calls.create({
       to,
       from: process.env.TWILIO_NUMBER,
 
-      // 🔥 THIS is the key line (Twilio → LiveKit directly)
-      url: sipTarget
+      // 🔥 THIS IS THE FIX (NOT url)
+      twiml: `
+        <Response>
+          <Dial>
+            <Sip>${sip}</Sip>
+          </Dial>
+        </Response>
+      `
     });
 
     console.log("✅ Call SID:", call.sid);
+
     return call;
 
   } catch (err) {
-    console.error("❌ Call failed:", err.message);
+    console.error("❌ CALL ERROR:", err.message);
   }
 }
 
