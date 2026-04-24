@@ -5,18 +5,48 @@
 </head>
 <body>
   <h1>Real-Time AI Caller</h1>
+
+  <input id="phone" placeholder="+1203..." style="padding:10px;width:250px;" />
+  <br><br>
+
   <button id="startBtn">Start Call</button>
 
   <script src="https://unpkg.com/livekit-client/dist/livekit-client.umd.js"></script>
 
   <script>
     let ws;
-
     let audioQueue = [];
     let isPlaying = false;
 
     document.getElementById("startBtn").onclick = async () => {
       console.log("Starting...");
+
+      const phone = document.getElementById("phone").value;
+
+      if (!phone) {
+        alert("Enter phone number");
+        return;
+      }
+
+      // 🔥 STEP 1: TRIGGER PHONE CALL
+      try {
+        await fetch("/call", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ phone })
+        });
+
+        console.log("📞 CALL TRIGGERED");
+
+      } catch (err) {
+        console.error("Call failed:", err);
+        alert("Call failed");
+        return;
+      }
+
+      // 🔥 STEP 2: START LIVEKIT + MIC (YOUR ORIGINAL CODE)
 
       const unlockCtx = new AudioContext();
       await unlockCtx.resume();
@@ -64,7 +94,7 @@
       };
 
       // =========================
-      // 🔥 AUDIO QUEUE SYSTEM
+      // AUDIO PLAYBACK
       // =========================
 
       function playNext() {
