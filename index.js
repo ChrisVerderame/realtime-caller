@@ -91,16 +91,16 @@ app.post("/call", async (req, res) => {
     console.log("📞 CALLING:", phone);
 
     await client.calls.create({
-      to: phone,
-      from: process.env.TWILIO_NUMBER,
-      twiml: `
-        <Response>
-          <Dial>
-            <Sip>sip:${process.env.LIVEKIT_SIP_ENDPOINT}</Sip>
-          </Dial>
-        </Response>
-      `,
-    });
+  to: phone,
+  from: process.env.TWILIO_NUMBER,
+  twiml: `
+    <Response>
+      <Dial answerOnBridge="true">
+        <Sip>sip:${process.env.LIVEKIT_SIP_ENDPOINT}?room=call-room</Sip>
+      </Dial>
+    </Response>
+  `
+});
 
     res.send("calling");
   } catch (err) {
