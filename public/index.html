@@ -1,144 +1,138 @@
 <!DOCTYPE html>
 <html>
 <head>
-  <title>AI Caller</title>
+  <title>AI Dialer</title>
 </head>
 <body>
-  <h1>Real-Time AI Caller</h1>
+  <h1>AI Auto Dialer</h1>
 
-  <input id="phone" placeholder="+1203..." style="padding:10px;width:250px;" />
-  <br><br>
-
-  <button id="startBtn">Start Call</button>
+  <button id="startBtn">Start Dialing</button>
 
   <script src="https://unpkg.com/livekit-client/dist/livekit-client.umd.js"></script>
 
   <script>
-let ws;
-let audioQueue = [];
-let isPlaying = false;
+    let ws;
+    let audioQueue = [];
+    let isPlaying = false;
 
-// 🔥 YOUR LEADS (replace later with Google Sheets)
-const leads = [
-  "+12038334544",
-  "+12038334544"
-];
+    // 🔥 YOUR LEADS
+    const leads = [
+      "+12038334544",
+      "+12038334544"
+    ];
 
-let current = 0;
+    document.getElementById("startBtn").onclick = async () => {
+      await startDialing();
+    };
 
-document.getElementById("startBtn").onclick = async () => {
-  startDialing();
-};
+    async function startDialing() {
+      console.log("🚀 Starting dialer...");
 
-async function startDialing() {
-  for (let i = 0; i < leads.length; i++) {
-    const phone = leads[i];
-
-    console.log("📞 Calling:", phone);
-
-    // 1. trigger call
-    await fetch("/call", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ phone })
-    });
-
-    // 2. ensure browser is connected (ONLY ONCE)
-    if (!ws) {
+      // Start browser agent ONCE
       await startBrowserAgent();
+
+      for (let i = 0; i < leads.length; i++) {
+        const phone = leads[i];
+
+        console.log("📞 Calling:", phone);
+
+        await fetch("/call", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({ phone })
+        });
+
+        // wait between calls (adjust later)
+        await wait(30000);
+      }
+
+      alert("✅ Finished dialing");
     }
 
-    // 3. wait for call duration (adjust this)
-    await wait(30000); // 30 sec (change later)
-  }
+    async function startBrowserAgent() {
+      if (ws) return;
 
-  alert("Finished dialing");
-}
+      console.log("🎤 Starting browser agent...");
 
-// 🔥 your existing mic + WS logic moved here
-async function startBrowserAgent() {
-  console.log("Starting browser agent...");
+      const unlockCtx = new AudioContext();
+      await unlockCtx.resume();
 
-  const unlockCtx = new AudioContext();
-  await unlockCtx.resume();
+      const res = await fetch("/token");
+      const data = await res.json();
 
-  const res = await fetch("/token");
-  const data = await res.json();
+      const room = new LivekitClient.Room();
+      await room.connect(data.url, data.token);
+      await room.localParticipant.setMicrophoneEnabled(true);
 
-  const room = new LivekitClient.Room();
-  await room.connect(data.url, data.token);
-  await room.localParticipant.setMicrophoneEnabled(true);
+      ws = new WebSocket(`wss://${location.host}/`);
 
-  ws = new WebSocket(`wss://${location.host}/`);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const audioContext = new AudioContext({ sampleRate: 48000 });
+      const source = audioContext.createMediaStreamSource(stream);
+      const processor = audioContext.createScriptProcessor(4096, 1, 1);
 
-  const audioContext = new AudioContext({ sampleRate: 48000 });
-  const source = audioContext.createMediaStreamSource(stream);
-  const processor = audioContext.createScriptProcessor(4096, 1, 1);
+      source.connect(processor);
 
-  source.connect(processor);
+      const silentGain = audioContext.createGain();
+      silentGain.gain.value = 0;
 
-  const silentGain = audioContext.createGain();
-  silentGain.gain.value = 0;
+      processor.connect(silentGain);
+      silentGain.connect(audioContext.destination);
 
-  processor.connect(silentGain);
-  silentGain.connect(audioContext.destination);
+      processor.onaudioprocess = (e) => {
+        if (ws.readyState !== 1) return;
 
-  processor.onaudioprocess = (e) => {
-    if (ws.readyState !== 1) return;
+        const input = e.inputBuffer.getChannelData(0);
 
-    const input = e.inputBuffer.getChannelData(0);
+        const buffer = new ArrayBuffer(input.length * 2);
+        const view = new DataView(buffer);
 
-    const buffer = new ArrayBuffer(input.length * 2);
-    const view = new DataView(buffer);
+        for (let i = 0; i < input.length; i++) {
+          let s = Math.max(-1, Math.min(1, input[i]));
+          view.setInt16(i * 2, s * 0x7fff, true);
+        }
 
-    for (let i = 0; i < input.length; i++) {
-      let s = Math.max(-1, Math.min(1, input[i]));
-      view.setInt16(i * 2, s * 0x7fff, true);
+        ws.send(buffer);
+      };
+
+      ws.onmessage = (msg) => {
+        audioQueue.push(msg.data);
+        if (!isPlaying) playNext();
+      };
     }
 
-    ws.send(buffer);
-  };
+    function playNext() {
+      if (audioQueue.length === 0) {
+        isPlaying = false;
+        return;
+      }
 
-  ws.onmessage = (msg) => {
-    audioQueue.push(msg.data);
-    if (!isPlaying) playNext();
-  };
-}
+      isPlaying = true;
 
-// audio playback
-function playNext() {
-  if (audioQueue.length === 0) {
-    isPlaying = false;
-    return;
-  }
+      const base64 = audioQueue.shift();
+      const byteCharacters = atob(base64);
+      const byteNumbers = new Array(byteCharacters.length);
 
-  isPlaying = true;
+      for (let i = 0; i < byteCharacters.length; i++) {
+        byteNumbers[i] = byteCharacters.charCodeAt(i);
+      }
 
-  const base64 = audioQueue.shift();
-  const byteCharacters = atob(base64);
-  const byteNumbers = new Array(byteCharacters.length);
+      const byteArray = new Uint8Array(byteNumbers);
+      const blob = new Blob([byteArray], { type: "audio/mpeg" });
+      const url = URL.createObjectURL(blob);
 
-  for (let i = 0; i < byteCharacters.length; i++) {
-    byteNumbers[i] = byteCharacters.charCodeAt(i);
-  }
+      const audio = new Audio(url);
 
-  const byteArray = new Uint8Array(byteNumbers);
-  const blob = new Blob([byteArray], { type: "audio/mpeg" });
-  const url = URL.createObjectURL(blob);
+      audio.onended = () => playNext();
+      audio.play().catch(() => playNext());
+    }
 
-  const audio = new Audio(url);
-
-  audio.onended = () => playNext();
-  audio.play().catch(() => playNext());
-}
-
-function wait(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-</script>
+    function wait(ms) {
+      return new Promise(resolve => setTimeout(resolve, ms));
+    }
+  </script>
 </body>
 </html>
