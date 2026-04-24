@@ -2,21 +2,93 @@ const express = require("express");
 const http = require("http");
 const WebSocket = require("ws");
 const { AccessToken } = require("livekit-server-sdk");
-
-const { getLeads } = require("./google");
-const { callLead } = require("./dialer");
+const twilio = require("twilio");
 
 const app = express();
-
-app.use(express.urlencoded({ extended: true }));
-app.use(express.json());
 app.use(express.static("public"));
+app.use(express.json());
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 // =========================
-// TOKEN ENDPOINT
+// TWILIO CLIENT (NEW)
+// =========================
+const client = twilio(
+  process.env.TWILIO_SID,
+  process.env.TWILIO_AUTH
+);
+
+// =========================
+// SIMPLE UI (BUTTON)
+// =========================
+app.get("/", (req, res) => {
+  res.send(`
+    <html>
+      <body style="font-family:sans-serif;padding:40px;">
+        <h2>LiveKit AI Caller</h2>
+
+        <input id="phone" placeholder="+1203..." style="padding:10px;width:250px;" />
+        <br><br>
+
+        <button onclick="callLead()" style="padding:10px 20px;">
+          Call Lead
+        </button>
+
+        <script>
+          async function callLead() {
+            const phone = document.getElementById("phone").value;
+
+            await fetch("/call", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ phone })
+            });
+
+            alert("Calling " + phone);
+          }
+        </script>
+      </body>
+    </html>
+  `);
+});
+
+// =========================
+// CALL ENDPOINT (NEW)
+// =========================
+app.post("/call", async (req, res) => {
+  try {
+    let { phone } = req.body;
+
+    if (!phone) return res.status(400).send("no phone");
+
+    const digits = phone.replace(/\D/g, "");
+    if (digits.length === 10) phone = "+1" + digits;
+
+    console.log("📞 CALLING:", phone);
+
+    await client.calls.create({
+      to: phone,
+      from: process.env.TWILIO_NUMBER,
+      twiml: `
+        <Response>
+          <Dial>
+            <Sip>sip:${process.env.LIVEKIT_SIP_ENDPOINT}</Sip>
+          </Dial>
+        </Response>
+      `
+    });
+
+    res.send("calling");
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("call failed");
+  }
+});
+
+// =========================
+// TOKEN ENDPOINT (UNCHANGED)
 // =========================
 app.get("/token", async (req, res) => {
   try {
@@ -54,7 +126,7 @@ app.get("/token", async (req, res) => {
 });
 
 // =========================
-// REALTIME AI (UNCHANGED)
+// REALTIME AI WS (UNCHANGED)
 // =========================
 wss.on("connection", (ws) => {
   console.log("AI WS CONNECTED");
@@ -150,25 +222,8 @@ wss.on("connection", (ws) => {
 });
 
 // =========================
-// START DIALING
+// START SERVER
 // =========================
-app.get("/start-dialing", async (req, res) => {
-  try {
-    const leads = await getLeads();
-
-    for (const lead of leads) {
-      await callLead(lead);
-      await new Promise((r) => setTimeout(r, 20000));
-    }
-
-    res.send("Dialing started");
-
-  } catch (err) {
-    console.error(err);
-    res.status(500).send("dialing error");
-  }
-});
-
 server.listen(process.env.PORT || 3000, () => {
   console.log("REALTIME AI SERVER RUNNING");
 });
