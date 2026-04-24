@@ -42,10 +42,12 @@ app.post("/call", async (req, res) => {
       twiml: `
 <Response>
   <Connect>
-    <Sip>sip:caller@${process.env.LIVEKIT_SIP_ENDPOINT}</Sip>
+    <Sip>
+      sip:caller@${process.env.LIVEKIT_SIP_ENDPOINT};transport=tls
+    </Sip>
   </Connect>
 </Response>
-      `
+`
     });
 
     console.log("✅ CALL SID:", call.sid);
