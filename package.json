@@ -3,13 +3,11 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js & node agent.js"
+    "start": "node agent.js"
   },
   "dependencies": {
-    "express": "^4.18.2",
-    "livekit-server-sdk": "^2.8.0",
-    "@livekit/rtc-node": "^0.9.0",
-    "ws": "^8.15.1",
-    "twilio": "^4.23.0"
+    "@livekit/agents": "^0.5.0",
+    "node-fetch": "^3.3.2",
+    "ws": "^8.15.1"
   }
 }
