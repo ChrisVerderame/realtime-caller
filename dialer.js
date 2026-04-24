@@ -27,7 +27,7 @@ async function callLead(lead) {
     }
 
     // 🔥 FINAL SIP TARGET (forces trunk match + TLS)
-    const sip = `sips:anything@${process.env.LIVEKIT_SIP_ENDPOINT};transport=tls`;
+    const sip = `sips:call-room@${process.env.LIVEKIT_SIP_ENDPOINT};transport=tls`;
 
     console.log("📞 CALLING:", to);
     console.log("➡️ SIP TARGET:", sip);
