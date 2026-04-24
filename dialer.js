@@ -5,6 +5,7 @@ const client = twilio(
   process.env.TWILIO_AUTH
 );
 
+// normalize phone → +1XXXXXXXXXX
 function normalizePhone(phone) {
   if (!phone) return null;
 
@@ -25,7 +26,8 @@ async function callLead(lead) {
       return;
     }
 
-    const sip = `sip:${process.env.LIVEKIT_SIP_ENDPOINT};transport=tls`;
+    // 🔥 CRITICAL FIX: include username (caller@)
+    const sip = `sip:caller@${process.env.LIVEKIT_SIP_ENDPOINT};transport=tls`;
 
     console.log("📞 CALLING:", to);
     console.log("➡️ SIP TARGET:", sip);
@@ -34,7 +36,7 @@ async function callLead(lead) {
       to,
       from: process.env.TWILIO_NUMBER,
 
-      // 🔥 THIS IS THE FIX (NOT url)
+      // 🔥 MUST use twiml (NOT url)
       twiml: `
         <Response>
           <Dial>
@@ -45,7 +47,6 @@ async function callLead(lead) {
     });
 
     console.log("✅ Call SID:", call.sid);
-
     return call;
 
   } catch (err) {
