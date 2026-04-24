@@ -4,84 +4,28 @@ const WebSocket = require("ws");
 const { AccessToken } = require("livekit-server-sdk");
 const twilio = require("twilio");
 
-// ---- SAFE FETCH (no node-fetch crash) ----
-let fetchSafe = global.fetch;
-if (!fetchSafe) {
-  // minimal fallback using https
-  const https = require("https");
-  fetchSafe = (url, options = {}) =>
-    new Promise((resolve, reject) => {
-      const u = new URL(url);
-      const req = https.request(
-        {
-          hostname: u.hostname,
-          path: u.pathname + u.search,
-          method: options.method || "GET",
-          headers: options.headers || {},
-        },
-        (res) => {
-          const chunks = [];
-          res.on("data", (c) => chunks.push(c));
-          res.on("end", () => {
-            const body = Buffer.concat(chunks);
-            resolve({
-              ok: res.statusCode >= 200 && res.statusCode < 300,
-              status: res.statusCode,
-              json: async () => JSON.parse(body.toString()),
-              arrayBuffer: async () => body,
-              text: async () => body.toString(),
-            });
-          });
-        }
-      );
-      req.on("error", reject);
-      if (options.body) req.write(options.body);
-      req.end();
-    });
-}
-
 const app = express();
-app.use(express.static("public"));
 app.use(express.json());
+app.use(express.static("public"));
 
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// ---- TWILIO ----
+// =========================
+// TWILIO
+// =========================
 const client = twilio(
   process.env.TWILIO_SID,
   process.env.TWILIO_AUTH
 );
 
-// ---- UI ----
-app.get("/", (req, res) => {
-  res.send(`
-    <html>
-      <body style="font-family:sans-serif;padding:40px;">
-        <h2>AI Caller</h2>
-        <input id="phone" placeholder="+1203..." style="padding:10px;width:250px;" />
-        <br><br>
-        <button onclick="callLead()">Call Lead</button>
-        <script>
-          async function callLead() {
-            const phone = document.getElementById("phone").value;
-            await fetch("/call", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ phone })
-            });
-            alert("Calling " + phone);
-          }
-        </script>
-      </body>
-    </html>
-  `);
-});
- 
-// ---- CALL ----
+// =========================
+// 📞 CALL ENDPOINT (FIXED)
+// =========================
 app.post("/call", async (req, res) => {
   try {
     let { phone } = req.body;
+
     if (!phone) return res.status(400).send("no phone");
 
     const digits = String(phone).replace(/\D/g, "");
@@ -90,29 +34,37 @@ app.post("/call", async (req, res) => {
 
     console.log("📞 CALLING:", phone);
 
-    await client.calls.create({
-  to: phone,
-  from: process.env.TWILIO_NUMBER,
-  twiml: `
-    <Response>
-      <Dial answerOnBridge="true">
-        <Sip>sip:${process.env.LIVEKIT_SIP_ENDPOINT}?room=call-room1</Sip>
-      </Dial>
-    </Response>
-  `
-});
+    const call = await client.calls.create({
+      to: phone,
+      from: process.env.TWILIO_NUMBER,
+
+      // ✅ FIXED (CONNECT)
+      twiml: `
+        <Response>
+          <Connect>
+            <Sip>sip:${process.env.LIVEKIT_SIP_ENDPOINT}</Sip>
+          </Connect>
+        </Response>
+      `
+    });
+
+    console.log("✅ CALL SID:", call.sid);
 
     res.send("calling");
+
   } catch (err) {
     console.error("CALL ERROR:", err);
     res.status(500).send("call failed");
   }
 });
 
-// ---- TOKEN ----
+// =========================
+// 🔑 TOKEN
+// =========================
 app.get("/token", async (req, res) => {
   try {
     const room = "call-room-1";
+
     const identity =
       req.query.identity ||
       "user-" + Math.random().toString(36).substring(7);
@@ -127,7 +79,7 @@ app.get("/token", async (req, res) => {
       roomJoin: true,
       room,
       canPublish: true,
-      canSubscribe: true,
+      canSubscribe: true
     });
 
     const token = await at.toJwt();
@@ -135,15 +87,18 @@ app.get("/token", async (req, res) => {
     res.json({
       token,
       url: process.env.LIVEKIT_URL,
-      room,
+      room
     });
+
   } catch (err) {
     console.error("TOKEN ERROR:", err.message);
     res.status(500).send("Token error");
   }
 });
 
-// ---- REALTIME AI ----
+// =========================
+// 🤖 REALTIME AI (YOUR PROMPT INCLUDED)
+// =========================
 wss.on("connection", (ws) => {
   console.log("AI WS CONNECTED");
 
@@ -160,11 +115,13 @@ wss.on("connection", (ws) => {
   dg.on("message", async (msg) => {
     try {
       const data = JSON.parse(msg);
+
       let transcript = data.channel?.alternatives?.[0]?.transcript;
       if (!transcript) return;
       if (!data.is_final) return;
 
       transcript = transcript.toLowerCase().trim();
+
       if (transcript === lastTranscript) return;
       lastTranscript = transcript;
 
@@ -176,14 +133,15 @@ wss.on("connection", (ws) => {
       isThinking = true;
 
       console.log("USER:", transcript);
+
       history.push({ role: "user", content: transcript });
 
-      const aiRes = await fetchSafe("https://api.anthropic.com/v1/messages", {
+      const aiRes = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: {
           "x-api-key": process.env.ANTHROPIC_KEY,
           "content-type": "application/json",
-          "anthropic-version": "2023-06-01",
+          "anthropic-version": "2023-06-01"
         },
         body: JSON.stringify({
           model: "claude-sonnet-4-5",
@@ -205,40 +163,65 @@ Write for voice, not text:
 - use light fillers naturally (yeah, gotcha, okay)
 - use soft transitions (so, gotcha—so, okay so)
 
+Questions should feel natural:
+- “what’s your timeline looking like?”
+- “are you the owner there?”
+- avoid blunt or robotic phrasing
+
 OPENING:
 “hey—this is Jack from Blackline, just reaching out about a form you filled out… were you looking to sell [address]?”
+
+CONVERSATION STYLE:
+→ acknowledge → react → respond
+
+FLOW:
+“yeah—it really just depends on the house… we’re usually making market-based offers depending on the condition”
+
+IF ASKED:
+“Chris handles all that…”
+
+APPOINTMENT:
+“what’s usually better for you, later today or tomorrow?”
+
+RULES:
+- no scripting
+- no stacking questions
+- no repeating
+- no asking for price
 
 TONE:
 natural, relaxed, confident
           `,
-          messages: history.slice(-6),
-        }),
+          messages: history.slice(-6)
+        })
       });
 
       const aiData = await aiRes.json();
       let reply = aiData.content?.[0]?.text || "yeah";
 
       console.log("AI:", reply);
+
       history.push({ role: "assistant", content: reply });
 
-      const ttsRes = await fetchSafe(
+      const ttsRes = await fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${process.env.VOICE_ID}?output_format=mp3_44100_128`,
         {
           method: "POST",
           headers: {
             "xi-api-key": process.env.ELEVEN_KEY,
-            "Content-Type": "application/json",
+            "Content-Type": "application/json"
           },
           body: JSON.stringify({
             text: reply,
             model_id: "eleven_multilingual_v2",
-            optimize_streaming_latency: 3,
-          }),
+            optimize_streaming_latency: 3
+          })
         }
       );
 
       const buffer = Buffer.from(await ttsRes.arrayBuffer());
       ws.send(buffer.toString("base64"));
+
     } catch (err) {
       console.error("PROCESS ERROR:", err);
     } finally {
@@ -253,7 +236,7 @@ natural, relaxed, confident
   ws.on("close", () => dg.close());
 });
 
-// ---- START ----
+// =========================
 server.listen(process.env.PORT || 3000, () => {
   console.log("REALTIME AI SERVER RUNNING");
 });
