@@ -4,36 +4,49 @@
   <title>AI Dialer</title>
 </head>
 <body>
-  <h1>AI Auto Dialer</h1>
+  <h1>AI Dialer</h1>
 
   <button id="startBtn">Start Dialing</button>
 
   <script src="https://unpkg.com/livekit-client/dist/livekit-client.umd.js"></script>
 
   <script>
-    let ws;
-    let audioQueue = [];
-    let isPlaying = false;
+    let room;
 
-    // 🔥 YOUR LEADS
     const leads = [
-      "+12038334544",
       "+12038334544"
     ];
 
     document.getElementById("startBtn").onclick = async () => {
-      await startDialing();
+      await start();
     };
 
-    async function startDialing() {
-      console.log("🚀 Starting dialer...");
+    async function start() {
+      console.log("🚀 Starting...");
 
-      // Start browser agent ONCE
-      await startBrowserAgent();
+      // 1. JOIN LIVEKIT ROOM FIRST
+      const res = await fetch("/token");
+      const data = await res.json();
 
-      for (let i = 0; i < leads.length; i++) {
-        const phone = leads[i];
+      room = new LivekitClient.Room();
 
+      await room.connect(data.url, data.token);
+
+      console.log("✅ Joined room");
+
+      // 2. SUBSCRIBE TO ALL AUDIO (THIS IS KEY)
+      room.on("trackSubscribed", (track, publication, participant) => {
+        if (track.kind === "audio") {
+          const audio = new Audio();
+          audio.srcObject = new MediaStream([track.mediaStreamTrack]);
+          audio.autoplay = true;
+
+          console.log("🔊 Playing incoming audio");
+        }
+      });
+
+      // 3. START CALLING
+      for (let phone of leads) {
         console.log("📞 Calling:", phone);
 
         await fetch("/call", {
@@ -44,94 +57,14 @@
           body: JSON.stringify({ phone })
         });
 
-        // wait between calls (adjust later)
         await wait(30000);
       }
 
-      alert("✅ Finished dialing");
-    }
-
-    async function startBrowserAgent() {
-      if (ws) return;
-
-      console.log("🎤 Starting browser agent...");
-
-      const unlockCtx = new AudioContext();
-      await unlockCtx.resume();
-
-      const res = await fetch("/token");
-      const data = await res.json();
-
-      const room = new LivekitClient.Room();
-      await room.connect(data.url, data.token);
-      await room.localParticipant.setMicrophoneEnabled(true);
-
-      ws = new WebSocket(`wss://${location.host}/`);
-
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-
-      const audioContext = new AudioContext({ sampleRate: 48000 });
-      const source = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
-
-      source.connect(processor);
-
-      const silentGain = audioContext.createGain();
-      silentGain.gain.value = 0;
-
-      processor.connect(silentGain);
-      silentGain.connect(audioContext.destination);
-
-      processor.onaudioprocess = (e) => {
-        if (ws.readyState !== 1) return;
-
-        const input = e.inputBuffer.getChannelData(0);
-
-        const buffer = new ArrayBuffer(input.length * 2);
-        const view = new DataView(buffer);
-
-        for (let i = 0; i < input.length; i++) {
-          let s = Math.max(-1, Math.min(1, input[i]));
-          view.setInt16(i * 2, s * 0x7fff, true);
-        }
-
-        ws.send(buffer);
-      };
-
-      ws.onmessage = (msg) => {
-        audioQueue.push(msg.data);
-        if (!isPlaying) playNext();
-      };
-    }
-
-    function playNext() {
-      if (audioQueue.length === 0) {
-        isPlaying = false;
-        return;
-      }
-
-      isPlaying = true;
-
-      const base64 = audioQueue.shift();
-      const byteCharacters = atob(base64);
-      const byteNumbers = new Array(byteCharacters.length);
-
-      for (let i = 0; i < byteCharacters.length; i++) {
-        byteNumbers[i] = byteCharacters.charCodeAt(i);
-      }
-
-      const byteArray = new Uint8Array(byteNumbers);
-      const blob = new Blob([byteArray], { type: "audio/mpeg" });
-      const url = URL.createObjectURL(blob);
-
-      const audio = new Audio(url);
-
-      audio.onended = () => playNext();
-      audio.play().catch(() => playNext());
+      alert("Done");
     }
 
     function wait(ms) {
-      return new Promise(resolve => setTimeout(resolve, ms));
+      return new Promise(r => setTimeout(r, ms));
     }
   </script>
 </body>
